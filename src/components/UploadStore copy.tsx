@@ -1,4 +1,4 @@
-// components/UploadStore.tsx - Simplified with upload logo and no processing history
+// components/UploadStore.tsx - Updated with New Theme Colors
 import React, { useState, useEffect, useCallback } from 'react';
 import { uploadData, list, remove, getUrl } from 'aws-amplify/storage';
 import { generateClient } from 'aws-amplify/data';
@@ -6,13 +6,6 @@ import * as XLSX from 'xlsx';
 import type { Schema } from '../../amplify/data/resource';
 
 const client = generateClient<Schema>();
-
-// Extend Window interface to include our refresh function
-declare global {
-  interface Window {
-    refreshInvoiceViewer?: () => void;
-  }
-}
 
 interface FileItem {
   path: string;
@@ -57,9 +50,11 @@ export const UploadStore: React.FC = () => {
   const [uploadProgress, setUploadProgress] = useState<UploadProgress[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [processingJobs, setProcessingJobs] = useState<Schema["InvoiceUploadJob"]["type"][]>([]);
+  const [clearingHistory, setClearingHistory] = useState(false);
   const [deletingFiles, setDeletingFiles] = useState<Set<string>>(new Set());
 
-  // Load user's files
+  // Load user's files and processing jobs
   const loadFiles = useCallback(async () => {
     try {
       setLoading(true);
@@ -86,9 +81,28 @@ export const UploadStore: React.FC = () => {
     }
   }, []);
 
+  // Load processing jobs with real-time updates
+  const loadProcessingJobs = useCallback(() => {
+    const subscription = client.models.InvoiceUploadJob.observeQuery().subscribe({
+      next: ({ items }) => {
+        setProcessingJobs(items.sort((a, b) => 
+          new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+        ));
+      },
+      error: (err) => {
+        console.error('Error loading processing jobs:', err);
+      }
+    });
+
+    return subscription;
+  }, []);
+
   useEffect(() => {
     loadFiles();
-  }, [loadFiles]);
+    const subscription = loadProcessingJobs();
+    
+    return () => subscription.unsubscribe();
+  }, [loadFiles, loadProcessingJobs]);
 
   // Frontend processing logic
   const processInvoiceFile = async (fileKey: string, fileName: string, progressIndex: number) => {
@@ -112,9 +126,9 @@ export const UploadStore: React.FC = () => {
       console.log('📝 [DEBUG] Creating InvoiceUploadJob...');
       const jobResult = await client.models.InvoiceUploadJob.create({
         fileName,
-        fileType: fileType as 'CSV' | 'XLSX',
+        fileType: fileType as 'CSV' | 'XLSX', // ✅ Type-safe enum value
         s3Key: fileKey,
-        status: 'PROCESSING',
+        status: 'PROCESSING', // ✅ Use enum string value
         totalInvoices: 0,
         successfulInvoices: 0,
         failedInvoices: 0,
@@ -151,7 +165,7 @@ export const UploadStore: React.FC = () => {
         totalRecords: invoiceData.length,
         validRecords: invoiceData.filter(inv => inv.isValid).length,
         invalidRecords: invoiceData.filter(inv => !inv.isValid).length,
-        sampleData: invoiceData.slice(0, 2)
+        sampleData: invoiceData.slice(0, 2) // Log first 2 records for debugging
       });
       
       // Update progress
@@ -192,6 +206,7 @@ export const UploadStore: React.FC = () => {
         const batchPromises = batch.map(async (invoice, index) => {
           const globalIndex = i + index + 1;
           
+          // Ensure job is not null before processing
           if (!job) {
             throw new Error('Job reference is null during invoice processing');
           }
@@ -223,7 +238,7 @@ export const UploadStore: React.FC = () => {
               issueDate: invoice.issueDate,
               dueDate: invoice.dueDate,
               uploadDate: new Date().toISOString().split('T')[0],
-              uploadJobId: job.id,
+              uploadJobId: job.id, // Safe to access since we checked above
               isValid: invoice.isValid,
               validationErrors: invoice.validationErrors,
             });
@@ -278,7 +293,7 @@ export const UploadStore: React.FC = () => {
         errorCount: allErrors.length
       });
 
-      // Update job status
+      // Update job status with proper enum values
       if (!job?.id) {
         throw new Error('Job ID is missing - cannot update job status');
       }
@@ -286,13 +301,14 @@ export const UploadStore: React.FC = () => {
       const finalStatus = failedCount === 0 ? 'COMPLETED' : (successfulCount === 0 ? 'FAILED' : 'COMPLETED');
       console.log(`📝 [DEBUG] Updating job status to: ${finalStatus}`);
       
+      // Create simplified error summary for storage
       const errorSummary = allErrors.length > 0 ? 
         `${allErrors.length} validation errors. Sample: ${allErrors.slice(0, 3).map(e => `Row ${e.row}: ${e.errors[0]}`).join('; ')}` : 
         null;
       
       const updateData = {
         id: job.id,
-        status: finalStatus as 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED',
+        status: finalStatus as 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED', // ✅ Type-safe enum value
         totalInvoices: invoiceData.length,
         successfulInvoices: successfulCount,
         failedInvoices: failedCount,
@@ -312,6 +328,7 @@ export const UploadStore: React.FC = () => {
 
         if (updateResult.errors) {
           console.error('❌ [DEBUG] Failed to update job status:', updateResult.errors);
+          // Log the specific error details
           updateResult.errors.forEach((error, index) => {
             console.error(`❌ [DEBUG] Update error ${index + 1}:`, {
               message: error.message,
@@ -432,7 +449,7 @@ export const UploadStore: React.FC = () => {
       console.log(`📤 [DEBUG] Starting upload for file ${index + 1}/${invoiceFiles.length}:`, file.name);
       
       try {
-        const fileName = `${Date.now()}-${file.name}`;
+        const fileName = `${Date.now()}-${file.name}`; // Add timestamp to prevent conflicts
         console.log('📤 [DEBUG] Generated unique filename:', fileName);
         
         const result = await uploadData({
@@ -522,6 +539,7 @@ export const UploadStore: React.FC = () => {
       return;
     }
 
+    // Add this file to the deleting set
     setDeletingFiles(prev => new Set(prev).add(filePath));
 
     try {
@@ -620,25 +638,18 @@ export const UploadStore: React.FC = () => {
       });
       console.log('✅ [DEBUG] Successfully deleted file from S3');
 
-      // Step 4: Reload the file list and refresh invoice viewer
+      // Step 4: Reload the file list
       console.log('🔄 [DEBUG] Reloading file list...');
       await loadFiles();
       console.log('✅ [DEBUG] File list reloaded');
       
-      // Trigger invoice viewer refresh
-      console.log('🔄 [DEBUG] Triggering invoice viewer refresh...');
-      if (window.refreshInvoiceViewer) {
-        window.refreshInvoiceViewer();
-        console.log('✅ [DEBUG] Invoice viewer refresh triggered');
-      } else {
-        console.warn('⚠️ [DEBUG] Invoice viewer refresh function not available');
-      }
-      
       console.log('🎉 [DEBUG] File deletion process completed successfully');
       
+      // Show success message
       if (associatedJobs.length > 0) {
         const totalInvoices = associatedJobs.reduce((sum, job) => sum + (job.successfulInvoices || 0), 0);
         setError(null);
+        // You could add a success state here if you want to show a success message
         console.log(`✅ [DEBUG] Successfully deleted file and ${totalInvoices} associated invoice records`);
       }
       
@@ -646,11 +657,66 @@ export const UploadStore: React.FC = () => {
       console.error('💥 [DEBUG] Error in file deletion process:', err);
       setError(`Failed to delete file and associated data: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
+      // Remove this file from the deleting set
       setDeletingFiles(prev => {
         const newSet = new Set(prev);
         newSet.delete(filePath);
         return newSet;
       });
+    }
+  };
+
+  const handleClearProcessingHistory = async () => {
+    if (!window.confirm('Are you sure you want to clear all processing history? This action cannot be undone.')) {
+      return;
+    }
+
+    setClearingHistory(true);
+    setError(null);
+
+    try {
+      console.log('🧹 [DEBUG] Starting to clear processing history...');
+      
+      // Delete all processing jobs
+      const deletePromises = processingJobs.map(async (job) => {
+        try {
+          console.log(`🗑️ [DEBUG] Deleting job: ${job.fileName} (${job.id})`);
+          const result = await client.models.InvoiceUploadJob.delete({ id: job.id });
+          
+          if (result.errors) {
+            console.error(`❌ [DEBUG] Failed to delete job ${job.id}:`, result.errors);
+            throw new Error(`Failed to delete job: ${result.errors[0]?.message || 'Unknown error'}`);
+          }
+          
+          console.log(`✅ [DEBUG] Successfully deleted job: ${job.id}`);
+          return result;
+        } catch (error) {
+          console.error(`💥 [DEBUG] Exception deleting job ${job.id}:`, error);
+          throw error;
+        }
+      });
+
+      // Wait for all deletions to complete
+      const results = await Promise.allSettled(deletePromises);
+      
+      // Count successes and failures
+      const successful = results.filter(result => result.status === 'fulfilled').length;
+      const failed = results.filter(result => result.status === 'rejected').length;
+      
+      console.log(`🏁 [DEBUG] Processing history cleanup completed: ${successful} deleted, ${failed} failed`);
+      
+      if (failed > 0) {
+        setError(`Warning: ${failed} out of ${processingJobs.length} jobs could not be deleted`);
+      }
+      
+      // The real-time subscription will automatically update the processingJobs state
+      console.log('✅ [DEBUG] Processing history cleared successfully');
+      
+    } catch (error) {
+      console.error('💥 [DEBUG] Error clearing processing history:', error);
+      setError('Failed to clear processing history. Please try again.');
+    } finally {
+      setClearingHistory(false);
     }
   };
 
@@ -775,26 +841,26 @@ export const UploadStore: React.FC = () => {
     
     // Validate invoice_id (UUID)
     if (!row.invoice_id || !isValidUUID(row.invoice_id)) {
-      errors.push(`Row ${rowNumber}: Invalid or missing invoice_id (must be UUID format)`);
+      errors.push(`Row ${rowNumber}: Invalid or missing invoice_id (must be UUID format like: 550e8400-e29b-41d4-a716-446655440001)`);
     } else {
       invoice.invoiceId = row.invoice_id;
     }
     
     // Validate seller_id (UUID)
     if (!row.seller_id || !isValidUUID(row.seller_id)) {
-      errors.push(`Row ${rowNumber}: Invalid or missing seller_id (must be UUID format)`);
+      errors.push(`Row ${rowNumber}: Invalid or missing seller_id (must be UUID format like: 550e8400-e29b-41d4-a716-446655440011)`);
     } else {
       invoice.sellerId = row.seller_id;
     }
     
     // Validate debtor_id (UUID)
     if (!row.debtor_id || !isValidUUID(row.debtor_id)) {
-      errors.push(`Row ${rowNumber}: Invalid or missing debtor_id (must be UUID format)`);
+      errors.push(`Row ${rowNumber}: Invalid or missing debtor_id (must be UUID format like: 550e8400-e29b-41d4-a716-446655440021)`);
     } else {
       invoice.debtorId = row.debtor_id;
     }
     
-    // Validate currency
+    // Validate currency (using schema enum values)
     const validCurrencies = ['USD', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'CHF', 'CNY'];
     if (!row.currency || !validCurrencies.includes(row.currency.toUpperCase())) {
       errors.push(`Row ${rowNumber}: Invalid currency. Must be one of: ${validCurrencies.join(', ')}`);
@@ -805,7 +871,7 @@ export const UploadStore: React.FC = () => {
     // Validate amount
     const amount = parseFloat(row.amount);
     if (isNaN(amount) || amount <= 0) {
-      errors.push(`Row ${rowNumber}: Invalid amount (must be positive number)`);
+      errors.push(`Row ${rowNumber}: Invalid amount (must be positive number like: 1500.50)`);
     } else {
       invoice.amount = amount;
     }
@@ -819,14 +885,14 @@ export const UploadStore: React.FC = () => {
     
     // Validate issue_date
     if (!row.issue_date || !isValidDate(row.issue_date)) {
-      errors.push(`Row ${rowNumber}: Invalid issue_date (must be YYYY-MM-DD format)`);
+      errors.push(`Row ${rowNumber}: Invalid issue_date (must be YYYY-MM-DD format like: 2024-01-15)`);
     } else {
       invoice.issueDate = formatDateString(row.issue_date);
     }
     
     // Validate due_date
     if (!row.due_date || !isValidDate(row.due_date)) {
-      errors.push(`Row ${rowNumber}: Invalid due_date (must be YYYY-MM-DD format)`);
+      errors.push(`Row ${rowNumber}: Invalid due_date (must be YYYY-MM-DD format like: 2024-02-15)`);
     } else {
       invoice.dueDate = formatDateString(row.due_date);
     }
@@ -871,8 +937,33 @@ export const UploadStore: React.FC = () => {
     return path.split('/').pop() || path;
   };
 
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case 'PENDING': return '⏳';
+      case 'PROCESSING': return '⚙️';
+      case 'COMPLETED': return '✅';
+      case 'FAILED': return '❌';
+      default: return '❓';
+    }
+  };
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'PENDING': return '#f59e0b';
+      case 'PROCESSING': return '#32b3e7';
+      case 'COMPLETED': return '#32b3e7';
+      case 'FAILED': return '#ef4444';
+      default: return '#5e6e77';
+    }
+  };
+
   return (
     <div className="invoice-upload">
+      <div className="upload-header">
+        <h2>📊 Invoice Processing Center</h2>
+        <p>Upload CSV or Excel files containing commercial invoice data for automated processing</p>
+      </div>
+
       {error && (
         <div className="error-message">
           ❌ {error}
@@ -889,12 +980,19 @@ export const UploadStore: React.FC = () => {
           id="invoice-upload"
         />
         <label htmlFor="invoice-upload" className="upload-button">
-          <div className="upload-icon">📤</div>
-          <div className="upload-text">
-            <h3>Upload Invoice Files</h3>
-            <p>Drop CSV or Excel files here or click to browse</p>
-          </div>
+          📤 Upload & Process Invoice Files (CSV/Excel)
         </label>
+        <div className="file-requirements">
+          <p><strong>Required columns:</strong> invoice_id, seller_id, debtor_id, currency, amount, product, issue_date, due_date</p>
+          <p><strong>Data format examples:</strong></p>
+          <ul>
+            <li><strong>IDs:</strong> UUID format (e.g., 550e8400-e29b-41d4-a716-446655440001)</li>
+            <li><strong>Currency:</strong> USD, EUR, GBP, JPY, CAD, AUD, CHF, CNY</li>
+            <li><strong>Amount:</strong> Positive decimal (e.g., 1500.50)</li>
+            <li><strong>Dates:</strong> YYYY-MM-DD format (e.g., 2024-01-15)</li>
+          </ul>
+          <p><strong>Supported formats:</strong> CSV, Excel (.xlsx)</p>
+        </div>
       </div>
 
       {uploadProgress.length > 0 && (
@@ -937,6 +1035,58 @@ export const UploadStore: React.FC = () => {
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {processingJobs.length > 0 && (
+        <div className="processing-jobs-section">
+          <div className="jobs-header">
+            <h3>⚙️ Processing History</h3>
+            <button 
+              onClick={handleClearProcessingHistory} 
+              className="clear-history-btn" 
+              disabled={clearingHistory}
+              title="Clear all processing history"
+            >
+              {clearingHistory ? '🧹 Clearing...' : '🗑️ Clear History'}
+            </button>
+          </div>
+          <div className="jobs-list">
+            {processingJobs.slice(0, 5).map((job) => (
+              <div key={job.id} className="job-item">
+                <div className="job-info">
+                  <div className="job-header">
+                    <span className="job-name">📄 {job.fileName}</span>
+                    <span 
+                      className="job-status"
+                      style={{ color: getStatusColor(job.status) }}
+                    >
+                      {getStatusIcon(job.status)} {job.status}
+                    </span>
+                  </div>
+                  
+                  {job.status === 'COMPLETED' && (
+                    <div className="job-results">
+                      <span className="success-count">✅ {job.successfulInvoices || 0} invoices processed</span>
+                      {(job.failedInvoices || 0) > 0 && (
+                        <span className="error-count">❌ {job.failedInvoices || 0} failed</span>
+                      )}
+                    </div>
+                  )}
+                  
+                  {job.status === 'FAILED' && job.errorMessage && (
+                    <div className="job-error">
+                      ❌ {job.errorMessage}
+                    </div>
+                  )}
+                  
+                  <div className="job-timestamp">
+                    {job.createdAt ? new Date(job.createdAt).toLocaleString() : 'Unknown date'}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -985,8 +1135,29 @@ export const UploadStore: React.FC = () => {
 
       <style>{`
         .invoice-upload {
+          max-width: 900px;
+          margin: 0 auto;
           padding: 20px;
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+
+        .upload-header {
+          margin-bottom: 30px;
+          text-align: center;
+          border-bottom: 2px solid #32b3e7;
+          padding-bottom: 20px;
+        }
+
+        .upload-header h2 {
+          margin: 0 0 10px 0;
+          color: #002b4b;
+          font-size: 28px;
+        }
+
+        .upload-header p {
+          margin: 0;
+          color: #5e6e77;
+          font-size: 16px;
         }
 
         .error-message {
@@ -1000,6 +1171,11 @@ export const UploadStore: React.FC = () => {
 
         .upload-section {
           margin-bottom: 30px;
+          padding: 25px;
+          border: 2px dashed #32b3e7;
+          border-radius: 8px;
+          text-align: center;
+          background: linear-gradient(135deg, #f8fcff 0%, #e6f7ff 100%);
         }
 
         .file-input {
@@ -1007,46 +1183,45 @@ export const UploadStore: React.FC = () => {
         }
 
         .upload-button {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 20px;
-          padding: 40px;
-          border: 3px dashed #32b3e7;
-          border-radius: 12px;
+          display: inline-block;
+          padding: 15px 30px;
+          background: linear-gradient(135deg, #32b3e7 0%, #1a9bd8 100%);
+          color: white;
+          border-radius: 8px;
           cursor: pointer;
-          background: linear-gradient(135deg, #f8fcff 0%, #e6f7ff 100%);
-          transition: all 0.3s ease;
-          min-height: 120px;
+          font-size: 16px;
+          font-weight: 600;
+          box-shadow: 0 4px 6px rgba(50, 179, 231, 0.3);
+          transition: transform 0.2s, box-shadow 0.2s;
         }
 
         .upload-button:hover {
-          border-color: #1a9bd8;
-          background: linear-gradient(135deg, #e6f7ff 0%, #d1f2ff 100%);
-          transform: translateY(-2px);
-          box-shadow: 0 8px 25px rgba(50, 179, 231, 0.15);
+          transform: translateY(-1px);
+          box-shadow: 0 6px 8px rgba(50, 179, 231, 0.4);
         }
 
-        .upload-icon {
-          font-size: 48px;
-          opacity: 0.8;
-        }
-
-        .upload-text {
-          text-align: center;
-        }
-
-        .upload-text h3 {
-          margin: 0 0 8px 0;
-          color: #002b4b;
-          font-size: 20px;
-          font-weight: 600;
-        }
-
-        .upload-text p {
-          margin: 0;
-          color: #5e6e77;
+        .file-requirements {
+          margin-top: 15px;
           font-size: 14px;
+          color: #5e6e77;
+          background: white;
+          padding: 15px;
+          border-radius: 6px;
+          border: 1px solid #32b3e7;
+          text-align: left;
+        }
+
+        .file-requirements p {
+          margin: 5px 0;
+        }
+
+        .file-requirements ul {
+          margin: 10px 0 10px 20px;
+          padding: 0;
+        }
+
+        .file-requirements li {
+          margin: 5px 0;
         }
 
         .upload-progress-section {
@@ -1118,6 +1293,123 @@ export const UploadStore: React.FC = () => {
           margin-top: 5px;
           display: block;
           font-weight: 500;
+        }
+
+        .processing-jobs-section {
+          margin-bottom: 30px;
+          padding: 20px;
+          background: white;
+          border-radius: 8px;
+          border: 1px solid #32b3e7;
+          box-shadow: 0 2px 4px rgba(50, 179, 231, 0.1);
+        }
+
+        .processing-jobs-section h3 {
+          margin: 0 0 20px 0;
+          color: #002b4b;
+        }
+
+        .jobs-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 20px;
+        }
+
+        .jobs-header h3 {
+          margin: 0;
+          color: #002b4b;
+        }
+
+        .clear-history-btn {
+          padding: 8px 16px;
+          background: #fed7d7;
+          color: #c53030;
+          border: 1px solid #feb2b2;
+          border-radius: 6px;
+          cursor: pointer;
+          font-size: 14px;
+          font-weight: 500;
+          transition: all 0.2s;
+          display: flex;
+          align-items: center;
+          gap: 5px;
+        }
+
+        .clear-history-btn:hover:not(:disabled) {
+          background: #feb2b2;
+          transform: translateY(-1px);
+          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .clear-history-btn:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+          transform: none;
+        }
+
+        .jobs-list {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+
+        .job-item {
+          padding: 15px;
+          background: #f8fcff;
+          border: 1px solid #32b3e7;
+          border-radius: 6px;
+          transition: background 0.2s;
+        }
+
+        .job-item:hover {
+          background: #e6f7ff;
+        }
+
+        .job-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 8px;
+        }
+
+        .job-name {
+          font-weight: 600;
+          color: #002b4b;
+        }
+
+        .job-status {
+          font-weight: 600;
+          font-size: 14px;
+        }
+
+        .job-results {
+          display: flex;
+          gap: 15px;
+          margin-bottom: 5px;
+          font-size: 14px;
+        }
+
+        .success-count {
+          color: #32b3e7;
+          font-weight: 500;
+        }
+
+        .error-count {
+          color: #ef4444;
+          font-weight: 500;
+        }
+
+        .job-error {
+          color: #ef4444;
+          font-size: 14px;
+          margin-bottom: 5px;
+          font-weight: 500;
+        }
+
+        .job-timestamp {
+          font-size: 12px;
+          color: #5e6e77;
         }
 
         .files-section {
@@ -1234,21 +1526,11 @@ export const UploadStore: React.FC = () => {
             padding: 15px;
           }
           
-          .upload-button {
-            flex-direction: column;
-            gap: 15px;
-            padding: 30px 20px;
+          .upload-header h2 {
+            font-size: 24px;
           }
           
-          .upload-icon {
-            font-size: 36px;
-          }
-          
-          .upload-text h3 {
-            font-size: 18px;
-          }
-          
-          .files-header {
+          .files-header, .jobs-header {
             flex-direction: column;
             gap: 10px;
             align-items: stretch;
@@ -1261,6 +1543,17 @@ export const UploadStore: React.FC = () => {
           }
           
           .file-details {
+            flex-direction: column;
+            gap: 5px;
+          }
+          
+          .job-header {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 5px;
+          }
+          
+          .job-results {
             flex-direction: column;
             gap: 5px;
           }

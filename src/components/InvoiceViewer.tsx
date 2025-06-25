@@ -1,134 +1,116 @@
-// components/InvoiceViewer.tsx - Updated with New Theme Colors & Fixed ESLint Error
+// components/InvoiceViewer.tsx - Updated with DaysToDueDate, Format column, and enhanced sorting
 import React, { useState, useEffect, useMemo } from 'react';
 import { generateClient } from 'aws-amplify/data';
 import type { Schema } from '../../amplify/data/resource';
 
 const client = generateClient<Schema>();
 
-interface InvoiceFilters {
-  currency: string;
-  dateRange: 'all' | 'last7days' | 'last30days' | 'last6months';
-  minAmount: string;
-  maxAmount: string;
-  searchTerm: string;
+type SortableField = 'issueDate' | 'dueDate' | 'amount' | 'daysToDueDate' | 'invoiceId' | 'sellerId' | 'debtorId' | 'product' | 'currency' | 'format';
+
+// Extend Window interface to include our refresh function
+declare global {
+  interface Window {
+    refreshInvoiceViewer?: () => void;
+  }
 }
 
 export const InvoiceViewer: React.FC = () => {
   const [invoices, setInvoices] = useState<Schema["Invoice"]["type"][]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [filters, setFilters] = useState<InvoiceFilters>({
-    currency: 'all',
-    dateRange: 'all',
-    minAmount: '',
-    maxAmount: '',
-    searchTerm: ''
-  });
-  const [sortBy, setSortBy] = useState<'issueDate' | 'dueDate' | 'amount'>('issueDate');
+  const [sortBy, setSortBy] = useState<SortableField>('issueDate');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [currentPage, setCurrentPage] = useState(1);
+  const [hoveredInvalidRow, setHoveredInvalidRow] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
   const itemsPerPage = 20;
 
-  // Load invoices with real-time updates
+  // Manual refresh function
+  const refreshInvoices = async () => {
+    try {
+      setLoading(true);
+      console.log('🔄 [DEBUG] Manually refreshing invoices...');
+      
+      const result = await client.models.Invoice.list();
+      if (result.errors) {
+        console.error('❌ [DEBUG] Error fetching invoices:', result.errors);
+        setError('Failed to refresh invoices');
+      } else {
+        console.log('✅ [DEBUG] Manual refresh successful, found', result.data?.length || 0, 'invoices');
+        setInvoices(result.data || []);
+        setError(null);
+      }
+    } catch (err) {
+      console.error('💥 [DEBUG] Exception during manual refresh:', err);
+      setError('Failed to refresh invoices');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Load invoices with real-time updates and manual refresh capability
   useEffect(() => {
+    console.log('🔄 [DEBUG] Setting up invoice subscription (refreshKey:', refreshKey, ')');
+    
     const subscription = client.models.Invoice.observeQuery().subscribe({
       next: ({ items }) => {
+        console.log('📊 [DEBUG] Received subscription update with', items.length, 'invoices');
         setInvoices(items);
         setLoading(false);
       },
       error: (err) => {
-        console.error('Error loading invoices:', err);
+        console.error('❌ [DEBUG] Subscription error:', err);
         setError('Failed to load invoices');
         setLoading(false);
       }
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      console.log('🧹 [DEBUG] Cleaning up invoice subscription');
+      subscription.unsubscribe();
+    };
+  }, [refreshKey]); // Add refreshKey as dependency to force re-subscription
+
+  // Expose refresh function globally for other components to use
+  useEffect(() => {
+    // Store the refresh function globally so UploadStore can call it
+    window.refreshInvoiceViewer = () => {
+      console.log('🔄 [DEBUG] External refresh triggered');
+      setRefreshKey(prev => prev + 1);
+      setTimeout(refreshInvoices, 500); // Small delay to ensure deletion is processed
+    };
+
+    // Cleanup
+    return () => {
+      delete window.refreshInvoiceViewer;
+    };
   }, []);
 
-  // Calculate analytics
+  // Calculate simplified analytics
   const analytics = useMemo(() => {
     const validInvoices = invoices.filter(inv => inv.isValid);
-    
     const totalAmount = validInvoices.reduce((sum, inv) => sum + inv.amount, 0);
-    const averageAmount = validInvoices.length > 0 ? totalAmount / validInvoices.length : 0;
-    
-    const currencyBreakdown = validInvoices.reduce((acc, inv) => {
-      acc[inv.currency] = (acc[inv.currency] || 0) + inv.amount;
-      return acc;
-    }, {} as Record<string, number>);
-
-    const now = new Date();
-    const overdueInvoices = validInvoices.filter(inv => 
-      new Date(inv.dueDate) < now
-    );
-
-    const dueSoon = validInvoices.filter(inv => {
-      const dueDate = new Date(inv.dueDate);
-      const daysDiff = Math.ceil((dueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-      return daysDiff >= 0 && daysDiff <= 7;
-    });
 
     return {
       totalInvoices: validInvoices.length,
-      totalAmount,
-      averageAmount,
-      currencyBreakdown,
-      overdueCount: overdueInvoices.length,
-      dueSoonCount: dueSoon.length,
-      invalidCount: invoices.length - validInvoices.length
+      totalAmount
     };
   }, [invoices]);
 
-  // Filter and sort invoices
-  const filteredAndSortedInvoices = useMemo(() => {
-    const filtered = invoices.filter(invoice => {
-      // Currency filter
-      if (filters.currency !== 'all' && invoice.currency !== filters.currency) {
-        return false;
-      }
+  // Calculate days between issue date and due date
+  const calculateDaysToDueDate = (issueDate: string, dueDate: string): number => {
+    const issue = new Date(issueDate);
+    const due = new Date(dueDate);
+    const diffTime = due.getTime() - issue.getTime();
+    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  };
 
-      // Date range filter
-      if (filters.dateRange !== 'all') {
-        const now = new Date();
-        const invoiceDate = new Date(invoice.issueDate);
-        let daysBack = 0;
-        
-        switch (filters.dateRange) {
-          case 'last7days': daysBack = 7; break;
-          case 'last30days': daysBack = 30; break;
-          case 'last6months': daysBack = 180; break;
-        }
-        
-        const cutoffDate = new Date(now.getTime() - daysBack * 24 * 60 * 60 * 1000);
-        if (invoiceDate < cutoffDate) return false;
-      }
-
-      // Amount range filter
-      if (filters.minAmount && invoice.amount < parseFloat(filters.minAmount)) {
-        return false;
-      }
-      if (filters.maxAmount && invoice.amount > parseFloat(filters.maxAmount)) {
-        return false;
-      }
-
-      // Search term filter
-      if (filters.searchTerm) {
-        const searchLower = filters.searchTerm.toLowerCase();
-        return (
-          invoice.invoiceId.toLowerCase().includes(searchLower) ||
-          invoice.product.toLowerCase().includes(searchLower) ||
-          invoice.sellerId.toLowerCase().includes(searchLower) ||
-          invoice.debtorId.toLowerCase().includes(searchLower)
-        );
-      }
-
-      return true;
-    });
-
-    // Sort
-    filtered.sort((a, b) => {
-      let aValue, bValue;
+  // Sort invoices
+  const sortedInvoices = useMemo(() => {
+    const validInvoices = invoices.filter(inv => inv.isValid);
+    
+    return validInvoices.sort((a, b) => {
+      let aValue: string | number, bValue: string | number;
       
       switch (sortBy) {
         case 'amount':
@@ -140,6 +122,37 @@ export const InvoiceViewer: React.FC = () => {
           bValue = new Date(b.dueDate).getTime();
           break;
         case 'issueDate':
+          aValue = new Date(a.issueDate).getTime();
+          bValue = new Date(b.issueDate).getTime();
+          break;
+        case 'daysToDueDate':
+          aValue = calculateDaysToDueDate(a.issueDate, a.dueDate);
+          bValue = calculateDaysToDueDate(b.issueDate, b.dueDate);
+          break;
+        case 'invoiceId':
+          aValue = a.invoiceId.toLowerCase();
+          bValue = b.invoiceId.toLowerCase();
+          break;
+        case 'sellerId':
+          aValue = a.sellerId.toLowerCase();
+          bValue = b.sellerId.toLowerCase();
+          break;
+        case 'debtorId':
+          aValue = a.debtorId.toLowerCase();
+          bValue = b.debtorId.toLowerCase();
+          break;
+        case 'product':
+          aValue = a.product.toLowerCase();
+          bValue = b.product.toLowerCase();
+          break;
+        case 'currency':
+          aValue = a.currency;
+          bValue = b.currency;
+          break;
+        case 'format':
+          aValue = a.isValid ? 'valid' : 'invalid';
+          bValue = b.isValid ? 'valid' : 'invalid';
+          break;
         default:
           aValue = new Date(a.issueDate).getTime();
           bValue = new Date(b.issueDate).getTime();
@@ -152,19 +165,17 @@ export const InvoiceViewer: React.FC = () => {
         return aValue < bValue ? 1 : -1;
       }
     });
-
-    return filtered;
-  }, [invoices, filters, sortBy, sortDirection]);
+  }, [invoices, sortBy, sortDirection]);
 
   // Paginate results
   const paginatedInvoices = useMemo(() => {
     const startIndex = (currentPage - 1) * itemsPerPage;
-    return filteredAndSortedInvoices.slice(startIndex, startIndex + itemsPerPage);
-  }, [filteredAndSortedInvoices, currentPage]);
+    return sortedInvoices.slice(startIndex, startIndex + itemsPerPage);
+  }, [sortedInvoices, currentPage]);
 
-  const totalPages = Math.ceil(filteredAndSortedInvoices.length / itemsPerPage);
+  const totalPages = Math.ceil(sortedInvoices.length / itemsPerPage);
 
-  const handleSort = (field: typeof sortBy) => {
+  const handleSort = (field: SortableField) => {
     if (sortBy === field) {
       setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
     } else {
@@ -186,15 +197,9 @@ export const InvoiceViewer: React.FC = () => {
     return new Date(dateString).toLocaleDateString();
   };
 
-  const isOverdue = (dueDate: string) => {
-    return new Date(dueDate) < new Date();
-  };
-
-  const isDueSoon = (dueDate: string) => {
-    const due = new Date(dueDate);
-    const now = new Date();
-    const daysDiff = Math.ceil((due.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-    return daysDiff >= 0 && daysDiff <= 7;
+  const getValidationErrorsTooltip = (errors: (string | null)[] | null | undefined) => {
+    if (!errors) return '';
+    return errors.filter((error): error is string => error !== null).join('; ');
   };
 
   if (loading) {
@@ -210,18 +215,13 @@ export const InvoiceViewer: React.FC = () => {
 
   return (
     <div className="invoice-viewer">
-      <div className="viewer-header">
-        <h2>📊 Invoice Dashboard</h2>
-        <p>View and analyze your processed invoice data</p>
-      </div>
-
       {error && (
         <div className="error-message">
           ❌ {error}
         </div>
       )}
 
-      {/* Analytics Cards */}
+      {/* Analytics Cards - Only Total Invoices and Total Value */}
       <div className="analytics-grid">
         <div className="analytics-card">
           <div className="card-icon">📋</div>
@@ -238,161 +238,26 @@ export const InvoiceViewer: React.FC = () => {
             <div className="card-label">Total Value</div>
           </div>
         </div>
-        
-        <div className="analytics-card">
-          <div className="card-icon">📈</div>
-          <div className="card-content">
-            <div className="card-number">${analytics.averageAmount.toLocaleString()}</div>
-            <div className="card-label">Average Value</div>
-          </div>
-        </div>
-        
-        <div className="analytics-card overdue">
-          <div className="card-icon">⚠️</div>
-          <div className="card-content">
-            <div className="card-number">{analytics.overdueCount}</div>
-            <div className="card-label">Overdue</div>
-          </div>
-        </div>
-        
-        <div className="analytics-card due-soon">
-          <div className="card-icon">⏰</div>
-          <div className="card-content">
-            <div className="card-number">{analytics.dueSoonCount}</div>
-            <div className="card-label">Due Soon</div>
-          </div>
-        </div>
-        
-        {analytics.invalidCount > 0 && (
-          <div className="analytics-card invalid">
-            <div className="card-icon">❌</div>
-            <div className="card-content">
-              <div className="card-number">{analytics.invalidCount}</div>
-              <div className="card-label">Invalid</div>
-            </div>
-          </div>
-        )}
       </div>
 
-      {/* Currency Breakdown */}
-      {Object.keys(analytics.currencyBreakdown).length > 0 && (
-        <div className="currency-breakdown">
-          <h3>💱 Currency Breakdown</h3>
-          <div className="currency-grid">
-            {Object.entries(analytics.currencyBreakdown).map(([currency, amount]) => (
-              <div key={currency} className="currency-item">
-                <span className="currency-code">{currency}</span>
-                <span className="currency-amount">{formatCurrency(amount, currency)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Filters */}
-      <div className="filters-section">
-        <h3>🔍 Filters & Search</h3>
-        <div className="filters-grid">
-          <div className="filter-group">
-            <label>Currency</label>
-            <select 
-              value={filters.currency} 
-              onChange={(e) => {
-                setFilters({...filters, currency: e.target.value});
-                setCurrentPage(1);
-              }}
-            >
-              <option value="all">All Currencies</option>
-              {Object.keys(analytics.currencyBreakdown).map(currency => (
-                <option key={currency} value={currency}>{currency}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="filter-group">
-            <label>Date Range</label>
-            <select 
-              value={filters.dateRange} 
-              onChange={(e) => {
-                setFilters({...filters, dateRange: e.target.value as 'all' | 'last7days' | 'last30days' | 'last6months'});
-                setCurrentPage(1);
-              }}
-            >
-              <option value="all">All Time</option>
-              <option value="last7days">Last 7 Days</option>
-              <option value="last30days">Last 30 Days</option>
-              <option value="last6months">Last 6 Months</option>
-            </select>
-          </div>
-
-          <div className="filter-group">
-            <label>Min Amount</label>
-            <input 
-              type="number" 
-              placeholder="0"
-              value={filters.minAmount}
-              onChange={(e) => {
-                setFilters({...filters, minAmount: e.target.value});
-                setCurrentPage(1);
-              }}
-            />
-          </div>
-
-          <div className="filter-group">
-            <label>Max Amount</label>
-            <input 
-              type="number" 
-              placeholder="No limit"
-              value={filters.maxAmount}
-              onChange={(e) => {
-                setFilters({...filters, maxAmount: e.target.value});
-                setCurrentPage(1);
-              }}
-            />
-          </div>
-
-          <div className="filter-group search-group">
-            <label>Search</label>
-            <input 
-              type="text" 
-              placeholder="Search invoices, products, IDs..."
-              value={filters.searchTerm}
-              onChange={(e) => {
-                setFilters({...filters, searchTerm: e.target.value});
-                setCurrentPage(1);
-              }}
-            />
-          </div>
-        </div>
-        
-        <button 
-          className="clear-filters-btn"
-          onClick={() => {
-            setFilters({
-              currency: 'all',
-              dateRange: 'all',
-              minAmount: '',
-              maxAmount: '',
-              searchTerm: ''
-            });
-            setCurrentPage(1);
-          }}
-        >
-          Clear All Filters
-        </button>
-      </div>
-
-      {/* Results Summary */}
+      {/* Results Summary with Refresh Button */}
       <div className="results-summary">
-        <p>
-          Showing {paginatedInvoices.length} of {filteredAndSortedInvoices.length} invoices
-          {filteredAndSortedInvoices.length !== analytics.totalInvoices && 
-            ` (filtered from ${analytics.totalInvoices} total)`
-          }
-        </p>
+        <div className="summary-content">
+          <p>
+            Showing {paginatedInvoices.length} of {sortedInvoices.length} invoices
+          </p>
+          <button 
+            onClick={refreshInvoices}
+            className="refresh-btn"
+            disabled={loading}
+            title="Refresh invoice data"
+          >
+            {loading ? '🔄 Refreshing...' : '🔄 Refresh'}
+          </button>
+        </div>
       </div>
 
-      {/* Invoice Table */}
+      {/* Invoice Table with Horizontal Scrolling */}
       <div className="invoice-table-container">
         <table className="invoice-table">
           <thead>
@@ -409,45 +274,98 @@ export const InvoiceViewer: React.FC = () => {
               >
                 Due Date {sortBy === 'dueDate' && (sortDirection === 'asc' ? '↑' : '↓')}
               </th>
-              <th>Invoice ID</th>
-              <th>Product</th>
-              <th>Currency</th>
+              <th 
+                className={`sortable ${sortBy === 'daysToDueDate' ? 'active' : ''}`}
+                onClick={() => handleSort('daysToDueDate')}
+              >
+                Days To Due Date {sortBy === 'daysToDueDate' && (sortDirection === 'asc' ? '↑' : '↓')}
+              </th>
+              <th 
+                className={`sortable ${sortBy === 'invoiceId' ? 'active' : ''}`}
+                onClick={() => handleSort('invoiceId')}
+              >
+                Invoice ID {sortBy === 'invoiceId' && (sortDirection === 'asc' ? '↑' : '↓')}
+              </th>
+              <th 
+                className={`sortable ${sortBy === 'sellerId' ? 'active' : ''}`}
+                onClick={() => handleSort('sellerId')}
+              >
+                Seller ID {sortBy === 'sellerId' && (sortDirection === 'asc' ? '↑' : '↓')}
+              </th>
+              <th 
+                className={`sortable ${sortBy === 'debtorId' ? 'active' : ''}`}
+                onClick={() => handleSort('debtorId')}
+              >
+                Debtor ID {sortBy === 'debtorId' && (sortDirection === 'asc' ? '↑' : '↓')}
+              </th>
+              <th 
+                className={`sortable ${sortBy === 'product' ? 'active' : ''}`}
+                onClick={() => handleSort('product')}
+              >
+                Product {sortBy === 'product' && (sortDirection === 'asc' ? '↑' : '↓')}
+              </th>
+              <th 
+                className={`sortable ${sortBy === 'currency' ? 'active' : ''}`}
+                onClick={() => handleSort('currency')}
+              >
+                Currency {sortBy === 'currency' && (sortDirection === 'asc' ? '↑' : '↓')}
+              </th>
               <th 
                 className={`sortable ${sortBy === 'amount' ? 'active' : ''}`}
                 onClick={() => handleSort('amount')}
               >
                 Amount {sortBy === 'amount' && (sortDirection === 'asc' ? '↑' : '↓')}
               </th>
-              <th>Status</th>
+              <th 
+                className={`sortable ${sortBy === 'format' ? 'active' : ''}`}
+                onClick={() => handleSort('format')}
+              >
+                Format {sortBy === 'format' && (sortDirection === 'asc' ? '↑' : '↓')}
+              </th>
             </tr>
           </thead>
           <tbody>
             {paginatedInvoices.map((invoice) => (
-              <tr 
-                key={invoice.id} 
-                className={`
-                  ${!invoice.isValid ? 'invalid-row' : ''} 
-                  ${isOverdue(invoice.dueDate) ? 'overdue-row' : ''} 
-                  ${isDueSoon(invoice.dueDate) ? 'due-soon-row' : ''}
-                `}
-              >
+              <tr key={invoice.id}>
                 <td>{formatDate(invoice.issueDate)}</td>
                 <td>{formatDate(invoice.dueDate)}</td>
+                <td className="days-to-due-cell">
+                  {calculateDaysToDueDate(invoice.issueDate, invoice.dueDate)}
+                </td>
                 <td className="invoice-id">{invoice.invoiceId}</td>
+                <td className="seller-id">{invoice.sellerId}</td>
+                <td className="debtor-id">{invoice.debtorId}</td>
                 <td className="product-cell">{invoice.product}</td>
                 <td className="currency-cell">{invoice.currency}</td>
                 <td className="amount-cell">
                   {formatCurrency(invoice.amount, invoice.currency)}
                 </td>
-                <td className="status-cell">
-                  {!invoice.isValid ? (
-                    <span className="status-badge invalid">❌ Invalid</span>
-                  ) : isOverdue(invoice.dueDate) ? (
-                    <span className="status-badge overdue">⚠️ Overdue</span>
-                  ) : isDueSoon(invoice.dueDate) ? (
-                    <span className="status-badge due-soon">⏰ Due Soon</span>
+                <td className="format-cell">
+                  {invoice.isValid ? (
+                    <span className="format-badge valid">✅ Valid</span>
                   ) : (
-                    <span className="status-badge valid">✅ Valid</span>
+                    <span 
+                      className="format-badge invalid"
+                      onMouseEnter={() => setHoveredInvalidRow(invoice.id)}
+                      onMouseLeave={() => setHoveredInvalidRow(null)}
+                      title={getValidationErrorsTooltip(invoice.validationErrors)}
+                    >
+                      ❌ Invalid
+                    </span>
+                  )}
+                  
+                  {/* Tooltip for invalid records */}
+                  {!invoice.isValid && hoveredInvalidRow === invoice.id && (
+                    <div className="validation-tooltip">
+                      <strong>Validation Errors:</strong>
+                      <ul>
+                        {(invoice.validationErrors || [])
+                          .filter((error): error is string => error !== null)
+                          .map((error, index) => (
+                            <li key={index}>{error}</li>
+                          ))}
+                      </ul>
+                    </div>
                   )}
                 </td>
               </tr>
@@ -483,8 +401,6 @@ export const InvoiceViewer: React.FC = () => {
 
       <style>{`
         .invoice-viewer {
-          max-width: 1200px;
-          margin: 0 auto;
           padding: 20px;
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         }
@@ -506,25 +422,6 @@ export const InvoiceViewer: React.FC = () => {
           margin-bottom: 10px;
         }
 
-        .viewer-header {
-          margin-bottom: 30px;
-          text-align: center;
-          border-bottom: 2px solid #32b3e7;
-          padding-bottom: 20px;
-        }
-
-        .viewer-header h2 {
-          margin: 0 0 10px 0;
-          color: #002b4b;
-          font-size: 28px;
-        }
-
-        .viewer-header p {
-          margin: 0;
-          color: #5e6e77;
-          font-size: 16px;
-        }
-
         .error-message {
           background: #fed7d7;
           color: #c53030;
@@ -536,8 +433,8 @@ export const InvoiceViewer: React.FC = () => {
 
         .analytics-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-          gap: 15px;
+          grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+          gap: 20px;
           margin-bottom: 30px;
         }
 
@@ -545,10 +442,10 @@ export const InvoiceViewer: React.FC = () => {
           background: white;
           border: 1px solid #32b3e7;
           border-radius: 8px;
-          padding: 20px;
+          padding: 25px;
           display: flex;
           align-items: center;
-          gap: 15px;
+          gap: 20px;
           box-shadow: 0 2px 4px rgba(50, 179, 231, 0.1);
           transition: transform 0.2s, box-shadow 0.2s;
         }
@@ -558,20 +455,8 @@ export const InvoiceViewer: React.FC = () => {
           box-shadow: 0 4px 6px rgba(50, 179, 231, 0.2);
         }
 
-        .analytics-card.overdue {
-          border-left: 4px solid #ef4444;
-        }
-
-        .analytics-card.due-soon {
-          border-left: 4px solid #f59e0b;
-        }
-
-        .analytics-card.invalid {
-          border-left: 4px solid #dc2626;
-        }
-
         .card-icon {
-          font-size: 24px;
+          font-size: 32px;
         }
 
         .card-content {
@@ -579,155 +464,91 @@ export const InvoiceViewer: React.FC = () => {
         }
 
         .card-number {
-          font-size: 24px;
+          font-size: 28px;
           font-weight: 700;
           color: #002b4b;
           margin-bottom: 5px;
         }
 
         .card-label {
-          font-size: 14px;
+          font-size: 16px;
           color: #5e6e77;
           font-weight: 500;
-        }
-
-        .currency-breakdown {
-          background: white;
-          border: 1px solid #32b3e7;
-          border-radius: 8px;
-          padding: 20px;
-          margin-bottom: 30px;
-          box-shadow: 0 2px 4px rgba(50, 179, 231, 0.1);
-        }
-
-        .currency-breakdown h3 {
-          margin: 0 0 15px 0;
-          color: #002b4b;
-        }
-
-        .currency-grid {
-          display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-          gap: 10px;
-        }
-
-        .currency-item {
-          display: flex;
-          justify-content: space-between;
-          padding: 10px;
-          background: #f8fcff;
-          border-radius: 4px;
-          border: 1px solid #32b3e7;
-        }
-
-        .currency-code {
-          font-weight: 600;
-          color: #002b4b;
-        }
-
-        .currency-amount {
-          color: #5e6e77;
-        }
-
-        .filters-section {
-          background: white;
-          border: 1px solid #32b3e7;
-          border-radius: 8px;
-          padding: 20px;
-          margin-bottom: 20px;
-          box-shadow: 0 2px 4px rgba(50, 179, 231, 0.1);
-        }
-
-        .filters-section h3 {
-          margin: 0 0 15px 0;
-          color: #002b4b;
-        }
-
-        .filters-grid {
-          display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-          gap: 15px;
-          margin-bottom: 15px;
-        }
-
-        .search-group {
-          grid-column: 1 / -1;
-        }
-
-        .filter-group {
-          display: flex;
-          flex-direction: column;
-        }
-
-        .filter-group label {
-          margin-bottom: 5px;
-          font-weight: 500;
-          color: #5e6e77;
-          font-size: 14px;
-        }
-
-        .filter-group select,
-        .filter-group input {
-          padding: 8px 12px;
-          border: 1px solid #32b3e7;
-          border-radius: 4px;
-          font-size: 14px;
-          background: white;
-        }
-
-        .filter-group select:focus,
-        .filter-group input:focus {
-          outline: none;
-          border-color: #32b3e7;
-          box-shadow: 0 0 0 3px rgba(50, 179, 231, 0.1);
-        }
-
-        .clear-filters-btn {
-          padding: 8px 16px;
-          background: #f8fcff;
-          border: 1px solid #32b3e7;
-          border-radius: 4px;
-          cursor: pointer;
-          font-size: 14px;
-          color: #5e6e77;
-          transition: background 0.2s;
-        }
-
-        .clear-filters-btn:hover {
-          background: #e6f7ff;
-          color: #002b4b;
         }
 
         .results-summary {
           margin-bottom: 15px;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        }
+        
+        .summary-content {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          width: 100%;
+        }
+        
+        .summary-content p {
+          margin: 0;
           color: #5e6e77;
           font-size: 14px;
+        }
+        
+        .refresh-btn {
+          padding: 6px 12px;
+          background: #f8fcff;
+          border: 1px solid #32b3e7;
+          border-radius: 4px;
+          cursor: pointer;
+          font-size: 12px;
+          color: #5e6e77;
+          transition: background 0.2s;
+          display: flex;
+          align-items: center;
+          gap: 4px;
+        }
+
+        .refresh-btn:hover:not(:disabled) {
+          background: #e6f7ff;
+          color: #002b4b;
+        }
+
+        .refresh-btn:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
         }
 
         .invoice-table-container {
           background: white;
           border: 1px solid #32b3e7;
           border-radius: 8px;
-          overflow: auto;
+          overflow-x: auto;
+          overflow-y: visible;
           box-shadow: 0 2px 4px rgba(50, 179, 231, 0.1);
           margin-bottom: 20px;
+          max-height: none;
+          height: auto;
         }
 
         .invoice-table {
           width: 100%;
           border-collapse: collapse;
-          min-width: 800px;
+          min-width: 1200px; /* Increased for additional columns */
+          table-layout: auto;
         }
 
         .invoice-table th {
           background: #f8fcff;
           border-bottom: 1px solid #32b3e7;
-          padding: 12px;
+          padding: 15px 12px;
           text-align: left;
           font-weight: 600;
           color: #002b4b;
-          position: sticky;
-          top: 0;
+          white-space: nowrap;
+          position: relative;
+          top: auto;
         }
 
         .invoice-table th.sortable {
@@ -746,43 +567,54 @@ export const InvoiceViewer: React.FC = () => {
         }
 
         .invoice-table td {
-          padding: 12px;
+          padding: 15px 12px;
           border-bottom: 1px solid #e6f7ff;
+          white-space: nowrap;
+          vertical-align: top;
+        }
+
+        .invoice-table tbody {
+          background: white;
+        }
+
+        .invoice-table tbody tr {
+          background: white;
+          display: table-row;
+          visibility: visible;
         }
 
         .invoice-table tr:hover {
-          background: #f8fcff;
-        }
-
-        .invoice-table tr.overdue-row {
-          background: #fef2f2;
-        }
-
-        .invoice-table tr.due-soon-row {
-          background: #fffbeb;
-        }
-
-        .invoice-table tr.invalid-row {
-          background: #fef2f2;
-          opacity: 0.7;
+          background: #f8fcff !important;
         }
 
         .invoice-id {
           font-family: 'Courier New', monospace;
           font-size: 12px;
           color: #5e6e77;
+          max-width: 120px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .seller-id, .debtor-id {
+          font-family: 'Courier New', monospace;
+          font-size: 12px;
+          color: #5e6e77;
+          max-width: 120px;
+          overflow: hidden;
+          text-overflow: ellipsis;
         }
 
         .product-cell {
-          max-width: 200px;
+          max-width: 150px;
           overflow: hidden;
           text-overflow: ellipsis;
-          white-space: nowrap;
         }
 
         .currency-cell {
           font-weight: 600;
           color: #002b4b;
+          text-align: center;
         }
 
         .amount-cell {
@@ -791,36 +623,81 @@ export const InvoiceViewer: React.FC = () => {
           color: #32b3e7;
         }
 
-        .status-cell {
+        .days-to-due-cell {
           text-align: center;
+          font-weight: 500;
+          color: #5e6e77;
         }
 
-        .status-badge {
-          padding: 4px 8px;
+        .format-cell {
+          text-align: center;
+          position: relative;
+        }
+
+        .format-badge {
+          padding: 6px 10px;
           border-radius: 12px;
           font-size: 12px;
           font-weight: 500;
           white-space: nowrap;
+          cursor: default;
         }
 
-        .status-badge.valid {
+        .format-badge.valid {
           background: #d1fae5;
           color: #065f46;
         }
 
-        .status-badge.overdue {
+        .format-badge.invalid {
           background: #fee2e2;
           color: #dc2626;
+          cursor: help;
+          position: relative;
         }
 
-        .status-badge.due-soon {
-          background: #fef3c7;
-          color: #d97706;
+        .validation-tooltip {
+          position: absolute;
+          top: 100%;
+          left: 50%;
+          transform: translateX(-50%);
+          background: #1f2937;
+          color: white;
+          padding: 12px;
+          border-radius: 6px;
+          font-size: 12px;
+          white-space: normal;
+          width: 300px;
+          z-index: 1000;
+          box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+          margin-top: 5px;
         }
 
-        .status-badge.invalid {
-          background: #fee2e2;
-          color: #dc2626;
+        .validation-tooltip::before {
+          content: '';
+          position: absolute;
+          top: -5px;
+          left: 50%;
+          transform: translateX(-50%);
+          border-left: 5px solid transparent;
+          border-right: 5px solid transparent;
+          border-bottom: 5px solid #1f2937;
+        }
+
+        .validation-tooltip strong {
+          display: block;
+          margin-bottom: 6px;
+          color: #f3f4f6;
+        }
+
+        .validation-tooltip ul {
+          margin: 0;
+          padding-left: 16px;
+          list-style-type: disc;
+        }
+
+        .validation-tooltip li {
+          margin-bottom: 4px;
+          line-height: 1.4;
         }
 
         .pagination {
@@ -832,10 +709,10 @@ export const InvoiceViewer: React.FC = () => {
         }
 
         .pagination-btn {
-          padding: 8px 16px;
+          padding: 10px 18px;
           background: white;
           border: 1px solid #32b3e7;
-          border-radius: 4px;
+          border-radius: 6px;
           cursor: pointer;
           font-size: 14px;
           color: #5e6e77;
@@ -855,6 +732,7 @@ export const InvoiceViewer: React.FC = () => {
         .page-info {
           color: #5e6e77;
           font-size: 14px;
+          font-weight: 500;
         }
 
         @media (max-width: 768px) {
@@ -866,21 +744,32 @@ export const InvoiceViewer: React.FC = () => {
             grid-template-columns: 1fr;
           }
 
-          .filters-grid {
-            grid-template-columns: 1fr;
-          }
-
           .invoice-table-container {
             font-size: 14px;
+            border-radius: 6px;
           }
 
           .invoice-table th,
           .invoice-table td {
-            padding: 8px;
+            padding: 10px 8px;
           }
 
-          .product-cell {
-            max-width: 120px;
+          .product-cell,
+          .invoice-id,
+          .seller-id,
+          .debtor-id {
+            max-width: 100px;
+          }
+
+          .validation-tooltip {
+            width: 250px;
+          }
+        }
+
+        @media (max-width: 480px) {
+          .validation-tooltip {
+            width: 200px;
+            font-size: 11px;
           }
         }
       `}</style>
