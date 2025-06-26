@@ -1,4 +1,4 @@
-// amplify/data/resource.ts - Updated with PDF support
+// amplify/data/resource.ts - NO FUNCTION IMPORTS
 import { type ClientSchema, a, defineData } from "@aws-amplify/backend";
 
 const schema = a.schema({
@@ -21,7 +21,7 @@ const schema = a.schema({
     invoices: a.hasMany('Invoice', 'uploadJobId'),
   })
   .authorization(allow => [
-    allow.authenticated()
+    allow.authenticated()  // ✅ Only user access needed
   ]),
 
   Invoice: a.model({
@@ -38,13 +38,9 @@ const schema = a.schema({
     uploadJob: a.belongsTo('InvoiceUploadJob', 'uploadJobId'),
     isValid: a.boolean(),
     validationErrors: a.string().array(),
-    // ✅ NEW: PDF document storage
-    pdfS3Key: a.string(), // S3 path to the PDF file
-    pdfFileName: a.string(), // Original filename for display
-    pdfUploadedAt: a.datetime(), // When PDF was uploaded
   })
   .authorization(allow => [
-    allow.authenticated()
+    allow.authenticated()  // ✅ Only user access needed
   ]),
 });
 
@@ -53,6 +49,6 @@ export type Schema = ClientSchema<typeof schema>;
 export const data = defineData({
   schema,
   authorizationModes: {
-    defaultAuthorizationMode: "userPool",
+    defaultAuthorizationMode: "userPool",  // ✅ Users authenticate with Cognito
   },
 });
