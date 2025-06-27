@@ -8,9 +8,6 @@ interface UploadPageProps {
   signOut?: () => void;
   user?: {
     username?: string;
-    attributes?: {
-      email?: string;
-    };
     signInDetails?: {
       loginId?: string;
     };
@@ -20,14 +17,8 @@ interface UploadPageProps {
 const UploadPage: React.FC<UploadPageProps> = ({ signOut, user }) => {
   const getUserDisplayName = () => {
     if (!user) return 'User';
-    // Prioritize email, then fallback to username/loginId
-    return user.attributes?.email || user.signInDetails?.loginId || user.username || 'User';
+    return user.username || user.signInDetails?.loginId || 'User';
   };
-
-  // Simple scroll to top when page loads
-  React.useEffect(() => {
-    window.scrollTo(0, 0);
-  }, []);
 
   return (
     <div className="upload-page">
@@ -75,7 +66,7 @@ const UploadPage: React.FC<UploadPageProps> = ({ signOut, user }) => {
           <div className="section">
             <div className="section-header">
               <h2>📋 View Invoices</h2>
-              <p>Before submitting, please check that the invoices have been uploaded correctly.</p>
+              <p>View, search, and analyze your processed invoice data with advanced sorting capabilities.</p>
             </div>
             <div className="component-wrapper">
               <InvoiceViewer />
@@ -87,35 +78,6 @@ const UploadPage: React.FC<UploadPageProps> = ({ signOut, user }) => {
       {/* Apply Theme Styles */}
       <style>{`
         ${uploadPageTheme}
-        
-        /* Ensure page starts at top and smooth scrolling */
-        html, body {
-          scroll-behavior: smooth;
-        }
-        
-        .upload-page {
-          scroll-margin-top: 0;
-          padding-top: 0;
-        }
-        
-        /* Override theme's sticky header positioning - keep it as is */
-        .upload-page-header {
-          position: sticky !important;
-          top: 0 !important;
-          z-index: 100 !important;
-        }
-        
-        /* Let JavaScript handle the spacing dynamically */
-        .page-content {
-          margin-top: 100px; /* Fallback margin */
-          padding-top: 20px;
-          min-height: calc(100vh - 100px);
-        }
-        
-        .content-container {
-          max-width: 100%;
-          overflow-x: auto;
-        }
         
         .section {
           margin-bottom: 40px;
@@ -170,12 +132,6 @@ const UploadPage: React.FC<UploadPageProps> = ({ signOut, user }) => {
         }
         
         @media (max-width: 768px) {
-          /* Ensure sticky header on mobile too */
-          .upload-page-header {
-            position: sticky !important;
-            top: 0 !important;
-          }
-          
           .section-header {
             padding: 20px;
           }

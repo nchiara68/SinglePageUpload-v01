@@ -1,4 +1,4 @@
-// components/InvoiceViewer.tsx - Updated with PDF upload/download functionality
+// components/InvoiceViewer.tsx - Without PDF viewer functionality
 import React, { useState, useEffect, useMemo } from 'react';
 import { generateClient } from 'aws-amplify/data';
 import { uploadData, getUrl } from 'aws-amplify/storage';
@@ -26,6 +26,7 @@ export const InvoiceViewer: React.FC = () => {
   const [refreshKey, setRefreshKey] = useState(0);
   const [uploadingPdfs, setUploadingPdfs] = useState<Set<string>>(new Set());
   const [pdfUploadProgress, setPdfUploadProgress] = useState<Record<string, number>>({});
+  const [deletingPdfs, setDeletingPdfs] = useState<Set<string>>(new Set());
   const itemsPerPage = 20;
 
   // Manual refresh function
@@ -314,6 +315,55 @@ export const InvoiceViewer: React.FC = () => {
     }
   };
 
+  // PDF Delete Handler
+  const handlePdfDelete = async (invoice: Schema["Invoice"]["type"]) => {
+    if (!invoice.pdfS3Key || !invoice.id) return;
+
+    const confirmDelete = window.confirm(
+      `Are you sure you want to delete the PDF "${invoice.pdfFileName || 'document'}"?\n\nThis action cannot be undone.`
+    );
+
+    if (!confirmDelete) return;
+
+    setDeletingPdfs(prev => new Set(prev).add(invoice.id));
+
+    try {
+      console.log('🗑️ [DEBUG] Starting PDF deletion for invoice:', invoice.id);
+      
+      // Update the Invoice record to remove PDF info
+      const updateResult = await client.models.Invoice.update({
+        id: invoice.id,
+        pdfS3Key: null,
+        pdfFileName: null,
+        pdfUploadedAt: null,
+      });
+
+      if (updateResult.errors) {
+        console.error('❌ [DEBUG] Failed to update invoice (remove PDF info):', updateResult.errors);
+        throw new Error('Failed to remove PDF information from database');
+      }
+
+      console.log('✅ [DEBUG] PDF information removed from invoice record successfully');
+      
+      // Note: We don't delete from S3 immediately for data safety
+      // The file will remain in S3 but won't be accessible through the app
+      // This allows for potential recovery if needed
+      
+      // Refresh the invoice list
+      refreshInvoices();
+      
+    } catch (error) {
+      console.error('💥 [DEBUG] PDF deletion failed:', error);
+      alert(`Failed to delete PDF: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setDeletingPdfs(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(invoice.id);
+        return newSet;
+      });
+    }
+  };
+
   if (loading) {
     return (
       <div className="invoice-viewer loading">
@@ -336,20 +386,20 @@ export const InvoiceViewer: React.FC = () => {
       {/* Analytics Cards - Show both valid and invalid counts */}
       <div className="analytics-grid">
         <div className="analytics-card">
-          <div className="card-icon">📋</div>
+          <div className="card-icon">▦</div>
           <div className="card-content">
             <div className="card-number">{analytics.totalInvoices.toLocaleString()}</div>
             <div className="card-label">Total Invoices</div>
             {analytics.invalidInvoices > 0 && (
               <div className="card-breakdown">
-                ✅ {analytics.validInvoices} Valid • ❌ {analytics.invalidInvoices} Invalid
+                <span className="valid-symbol">✓</span> {analytics.validInvoices} Valid • <span className="invalid-symbol">✗</span> {analytics.invalidInvoices} Invalid
               </div>
             )}
           </div>
         </div>
         
         <div className="analytics-card">
-          <div className="card-icon">💰</div>
+          <div className="card-icon">$</div>
           <div className="card-content">
             <div className="card-number">${analytics.totalAmount.toLocaleString()}</div>
             <div className="card-label">Total Value (Valid Invoices Only)</div>
@@ -369,7 +419,7 @@ export const InvoiceViewer: React.FC = () => {
             disabled={loading}
             title="Refresh invoice data"
           >
-            {loading ? '🔄 Refreshing...' : '🔄 Refresh'}
+            <span className={loading ? 'unicode-spinner' : ''}>{loading ? '↻' : '↻'}</span> {loading ? 'Refreshing...' : 'Refresh'}
           </button>
         </div>
       </div>
@@ -384,6 +434,12 @@ export const InvoiceViewer: React.FC = () => {
                 onClick={() => handleSort('format')}
               >
                 Format {sortBy === 'format' && (sortDirection === 'asc' ? '↑' : '↓')}
+              </th>
+              <th 
+                className={`sortable ${sortBy === 'pdfDocument' ? 'active' : ''}`}
+                onClick={() => handleSort('pdfDocument')}
+              >
+                PDF Document {sortBy === 'pdfDocument' && (sortDirection === 'asc' ? '↑' : '↓')}
               </th>
               <th 
                 className={`sortable ${sortBy === 'issueDate' ? 'active' : ''}`}
@@ -439,12 +495,6 @@ export const InvoiceViewer: React.FC = () => {
               >
                 Amount {sortBy === 'amount' && (sortDirection === 'asc' ? '↑' : '↓')}
               </th>
-              <th 
-                className={`sortable ${sortBy === 'pdfDocument' ? 'active' : ''}`}
-                onClick={() => handleSort('pdfDocument')}
-              >
-                PDF Document {sortBy === 'pdfDocument' && (sortDirection === 'asc' ? '↑' : '↓')}
-              </th>
             </tr>
           </thead>
           <tbody>
@@ -455,7 +505,7 @@ export const InvoiceViewer: React.FC = () => {
               >
                 <td className="format-cell">
                   {invoice.isValid ? (
-                    <span className="format-badge valid">✅ Valid</span>
+                    <span className="format-badge valid">✓ Valid</span>
                   ) : (
                     <span 
                       className="format-badge invalid"
@@ -463,7 +513,7 @@ export const InvoiceViewer: React.FC = () => {
                       onMouseLeave={() => setHoveredInvalidRow(null)}
                       title={getValidationErrorsTooltip(invoice.validationErrors)}
                     >
-                      ❌ Invalid
+                      ✗ Invalid
                     </span>
                   )}
                   
@@ -481,19 +531,6 @@ export const InvoiceViewer: React.FC = () => {
                     </div>
                   )}
                 </td>
-                <td>{formatDate(invoice.issueDate)}</td>
-                <td>{formatDate(invoice.dueDate)}</td>
-                <td className="days-to-due-cell">
-                  {calculateDaysToDueDate(invoice.issueDate, invoice.dueDate)}
-                </td>
-                <td className="invoice-id">{invoice.invoiceId}</td>
-                <td className="seller-id">{invoice.sellerId}</td>
-                <td className="debtor-id">{invoice.debtorId}</td>
-                <td className="product-cell">{invoice.product}</td>
-                <td className="currency-cell">{invoice.currency}</td>
-                <td className="amount-cell">
-                  {formatCurrency(invoice.amount, invoice.currency)}
-                </td>
                 <td className="pdf-cell">
                   {!invoice.isValid ? (
                     // Disable PDF upload for invalid invoices
@@ -502,15 +539,28 @@ export const InvoiceViewer: React.FC = () => {
                       <span className="pdf-disabled-reason">(Fix validation errors first)</span>
                     </div>
                   ) : invoice.pdfS3Key ? (
-                    // Show download button if PDF exists
+                    // Show download and delete buttons if PDF exists
                     <div className="pdf-actions">
-                      <button
-                        onClick={() => handlePdfDownload(invoice)}
-                        className="pdf-download-btn"
-                        title={`Download: ${invoice.pdfFileName || 'invoice.pdf'}`}
-                      >
-                        📄 Download
-                      </button>
+                      <div className="pdf-buttons">
+                        <button
+                          onClick={() => handlePdfDownload(invoice)}
+                          className="pdf-download-btn"
+                          title={`Download: ${invoice.pdfFileName || 'invoice.pdf'}`}
+                          disabled={deletingPdfs.has(invoice.id)}
+                        >
+                          ⤵ Download
+                        </button>
+                        <button
+                          onClick={() => handlePdfDelete(invoice)}
+                          className="pdf-delete-btn"
+                          title={`Delete: ${invoice.pdfFileName || 'invoice.pdf'}`}
+                          disabled={deletingPdfs.has(invoice.id)}
+                        >
+                          <span className={deletingPdfs.has(invoice.id) ? 'unicode-spinner' : ''}>
+                            {deletingPdfs.has(invoice.id) ? '↻' : '×'}
+                          </span>
+                        </button>
+                      </div>
                       <div className="pdf-info">
                         {invoice.pdfFileName && (
                           <span className="pdf-filename">{invoice.pdfFileName}</span>
@@ -522,7 +572,7 @@ export const InvoiceViewer: React.FC = () => {
                     <div className="pdf-upload">
                       {uploadingPdfs.has(invoice.id) ? (
                         <div className="pdf-uploading">
-                          <div className="upload-spinner">📤</div>
+                          <div className="upload-spinner">↻</div>
                           <div className="upload-progress">
                             {pdfUploadProgress[invoice.id] || 0}%
                           </div>
@@ -547,12 +597,25 @@ export const InvoiceViewer: React.FC = () => {
                             className="pdf-upload-btn"
                             title="Upload PDF document for this invoice"
                           >
-                            📤 Upload PDF
+                            ⤴ Upload PDF
                           </label>
                         </>
                       )}
                     </div>
                   )}
+                </td>
+                <td>{formatDate(invoice.issueDate)}</td>
+                <td>{formatDate(invoice.dueDate)}</td>
+                <td className="days-to-due-cell">
+                  {calculateDaysToDueDate(invoice.issueDate, invoice.dueDate)}
+                </td>
+                <td className="invoice-id">{invoice.invoiceId}</td>
+                <td className="seller-id">{invoice.sellerId}</td>
+                <td className="debtor-id">{invoice.debtorId}</td>
+                <td className="product-cell">{invoice.product}</td>
+                <td className="currency-cell">{invoice.currency}</td>
+                <td className="amount-cell">
+                  {formatCurrency(invoice.amount, invoice.currency)}
                 </td>
               </tr>
             ))}
@@ -669,6 +732,14 @@ export const InvoiceViewer: React.FC = () => {
           font-weight: 500;
         }
 
+        .card-breakdown .valid-symbol {
+          color: #059669;
+        }
+
+        .card-breakdown .invalid-symbol {
+          color: #dc2626;
+        }
+
         .results-summary {
           margin-bottom: 15px;
           display: flex;
@@ -728,7 +799,7 @@ export const InvoiceViewer: React.FC = () => {
         .invoice-table {
           width: 100%;
           border-collapse: collapse;
-          min-width: 1400px; /* Increased for PDF column */
+          min-width: 1400px; /* Reduced from 1500px since we removed view button */
           table-layout: auto;
         }
 
@@ -851,6 +922,11 @@ export const InvoiceViewer: React.FC = () => {
           color: #065f46;
         }
 
+        .format-badge.valid::before {
+          content: '';
+          margin-right: 2px;
+        }
+
         .format-badge.invalid {
           background: #fee2e2;
           color: #dc2626;
@@ -907,34 +983,64 @@ export const InvoiceViewer: React.FC = () => {
         .pdf-cell {
           text-align: center;
           padding: 10px 8px;
-          min-width: 140px;
-          max-width: 160px;
+          min-width: 160px;
+          max-width: 180px;
         }
 
         .pdf-actions {
           display: flex;
           flex-direction: column;
           align-items: center;
-          gap: 5px;
+          gap: 6px;
         }
 
-        .pdf-download-btn {
-          padding: 6px 12px;
-          background: #32b3e7;
-          color: white;
+        .pdf-buttons {
+          display: flex;
+          gap: 4px;
+          flex-wrap: wrap;
+          justify-content: center;
+        }
+
+        .pdf-download-btn, 
+        .pdf-delete-btn {
+          padding: 6px 10px;
           border: none;
           border-radius: 4px;
           cursor: pointer;
-          font-size: 12px;
+          font-size: 11px;
           font-weight: 500;
-          transition: background 0.2s;
+          transition: all 0.2s;
           display: flex;
           align-items: center;
           gap: 4px;
+          min-width: 75px;
+          justify-content: center;
         }
 
-        .pdf-download-btn:hover {
+        .pdf-download-btn {
+          background: #32b3e7;
+          color: white;
+        }
+
+        .pdf-download-btn:hover:not(:disabled) {
           background: #1a9bd8;
+        }
+
+        .pdf-delete-btn {
+          background: #fed7d7;
+          color: #c53030;
+          border: 1px solid #feb2b2;
+        }
+
+        .pdf-delete-btn:hover:not(:disabled) {
+          background: #feb2b2;
+          color: #c53030;
+        }
+
+        .pdf-download-btn:disabled, 
+        .pdf-delete-btn:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
         }
 
         .pdf-info {
@@ -942,11 +1048,11 @@ export const InvoiceViewer: React.FC = () => {
         }
 
         .pdf-filename {
-          font-size: 10px;
+          font-size: 9px;
           color: #5e6e77;
           word-break: break-all;
           line-height: 1.2;
-          max-width: 140px;
+          max-width: 160px;
           display: block;
         }
 
@@ -989,7 +1095,7 @@ export const InvoiceViewer: React.FC = () => {
 
         .upload-spinner {
           font-size: 16px;
-          animation: pulse 1.5s ease-in-out infinite;
+          animation: spin 1.5s linear infinite;
         }
 
         .upload-progress {
@@ -998,10 +1104,14 @@ export const InvoiceViewer: React.FC = () => {
           font-weight: 600;
         }
 
-        @keyframes pulse {
-          0% { opacity: 1; }
-          50% { opacity: 0.5; }
-          100% { opacity: 1; }
+        .unicode-spinner {
+          display: inline-block;
+          animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
         }
 
         .pdf-disabled {
@@ -1086,15 +1196,26 @@ export const InvoiceViewer: React.FC = () => {
             max-width: 100px;
           }
 
+          .pdf-cell {
+            max-width: 120px;
+            min-width: 120px;
+          }
+
           .pdf-filename {
-            font-size: 9px;
-            max-width: 80px;
+            font-size: 8px;
+            max-width: 100px;
           }
 
           .pdf-upload-btn,
-          .pdf-download-btn {
+          .pdf-download-btn,
+          .pdf-delete-btn {
             padding: 4px 8px;
             font-size: 10px;
+            min-width: 50px;
+          }
+
+          .pdf-buttons {
+            gap: 3px;
           }
 
           .validation-tooltip {

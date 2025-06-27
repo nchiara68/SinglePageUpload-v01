@@ -1,8 +1,12 @@
 // src/theme.ts - Centralized theme and styles for the application
+/* .app --> background:linear-gradient(135deg, #32b3e7 0%, #002b4b 100%);*/
+/* .amplify-authenticator__container --> linear-gradient(135deg, #32b3e7 0%, #002b4b 100%);*/
+/* ..upload-page --> linear-gradient(135deg, #32b3e7 0%, #002b4b 100%);*/
 export const appTheme = `
   .app {
     min-height: 100vh;
-    background: linear-gradient(135deg, #32b3e7 0%, #002b4b 100%);
+    background:  #002b4b;
+    
   }
 
   /* Override Amplify Authenticator styles */
@@ -14,7 +18,7 @@ export const appTheme = `
   }
 
   .amplify-authenticator__container {
-    background: linear-gradient(135deg, #32b3e7 0%, #002b4b 100%);
+    background:   #002b4b;;
     min-height: 100vh;
     display: flex;
     align-items: center;
@@ -36,7 +40,7 @@ export const appTheme = `
 export const uploadPageTheme = `
   .upload-page {
     min-height: 100vh;
-    background: linear-gradient(135deg, #32b3e7 0%, #002b4b 100%);
+    background: #32b3e7;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   }
 

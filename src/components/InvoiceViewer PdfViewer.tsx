@@ -1,8 +1,9 @@
-// components/InvoiceViewer.tsx - Without PDF viewer functionality
+// components/InvoiceViewer.tsx - Updated with PDF preview on hover and improved delete button styling
 import React, { useState, useEffect, useMemo } from 'react';
 import { generateClient } from 'aws-amplify/data';
 import { uploadData, getUrl } from 'aws-amplify/storage';
 import type { Schema } from '../../amplify/data/resource';
+import { PDFViewer } from './PDFViewer';
 
 const client = generateClient<Schema>();
 
@@ -27,6 +28,12 @@ export const InvoiceViewer: React.FC = () => {
   const [uploadingPdfs, setUploadingPdfs] = useState<Set<string>>(new Set());
   const [pdfUploadProgress, setPdfUploadProgress] = useState<Record<string, number>>({});
   const [deletingPdfs, setDeletingPdfs] = useState<Set<string>>(new Set());
+  const [viewingPdf, setViewingPdf] = useState<{
+    s3Key: string;
+    fileName: string;
+    invoiceId: string;
+  } | null>(null);
+  const [hoverTimeout, setHoverTimeout] = useState<NodeJS.Timeout | null>(null);
   const itemsPerPage = 20;
 
   // Manual refresh function
@@ -73,7 +80,16 @@ export const InvoiceViewer: React.FC = () => {
       console.log('🧹 [DEBUG] Cleaning up invoice subscription');
       subscription.unsubscribe();
     };
-  }, [refreshKey]); // Add refreshKey as dependency to force re-subscription
+  }, [refreshKey]);
+
+  // Cleanup hover timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (hoverTimeout) {
+        clearTimeout(hoverTimeout);
+      }
+    };
+  }, [hoverTimeout]); // Add refreshKey as dependency to force re-subscription
 
   // Expose refresh function globally for other components to use
   useEffect(() => {
@@ -292,6 +308,48 @@ export const InvoiceViewer: React.FC = () => {
     }
   };
 
+  // PDF Preview Handlers
+  const handlePdfHoverStart = (invoice: Schema["Invoice"]["type"]) => {
+    if (!invoice.pdfS3Key) return;
+    
+    console.log('🖱️ [DEBUG] PDF hover started for:', invoice.pdfFileName);
+    
+    // Clear any existing timeout
+    if (hoverTimeout) {
+      clearTimeout(hoverTimeout);
+    }
+    
+    // Set a delay before showing PDF preview
+    const timeout = setTimeout(() => {
+      console.log('📄 [DEBUG] Showing PDF preview for:', invoice.pdfFileName);
+      setViewingPdf({
+        s3Key: invoice.pdfS3Key!,
+        fileName: invoice.pdfFileName || 'invoice.pdf',
+        invoiceId: invoice.id
+      });
+    }, 1000); // 1 second delay before showing preview
+    
+    setHoverTimeout(timeout);
+  };
+
+  const handlePdfHoverEnd = () => {
+    console.log('🖱️ [DEBUG] PDF hover ended');
+    // Clear timeout if user stops hovering before delay completes
+    if (hoverTimeout) {
+      clearTimeout(hoverTimeout);
+      setHoverTimeout(null);
+    }
+  };
+
+  const closePdfViewer = () => {
+    console.log('📄 [DEBUG] Closing PDF viewer');
+    setViewingPdf(null);
+    if (hoverTimeout) {
+      clearTimeout(hoverTimeout);
+      setHoverTimeout(null);
+    }
+  };
+
   // PDF Download Handler
   const handlePdfDownload = async (invoice: Schema["Invoice"]["type"]) => {
     if (!invoice.pdfS3Key) return;
@@ -386,6 +444,7 @@ export const InvoiceViewer: React.FC = () => {
       {/* Analytics Cards - Show both valid and invalid counts */}
       <div className="analytics-grid">
         <div className="analytics-card">
+          <div className="card-icon">📋</div>
           <div className="card-content">
             <div className="card-number">{analytics.totalInvoices.toLocaleString()}</div>
             <div className="card-label">Total Invoices</div>
@@ -398,6 +457,7 @@ export const InvoiceViewer: React.FC = () => {
         </div>
         
         <div className="analytics-card">
+          <div className="card-icon">💰</div>
           <div className="card-content">
             <div className="card-number">${analytics.totalAmount.toLocaleString()}</div>
             <div className="card-label">Total Value (Valid Invoices Only)</div>
@@ -542,11 +602,19 @@ export const InvoiceViewer: React.FC = () => {
                       <div className="pdf-buttons">
                         <button
                           onClick={() => handlePdfDownload(invoice)}
-                          className="pdf-download-btn"
-                          title={`Download: ${invoice.pdfFileName || 'invoice.pdf'}`}
+                          onMouseEnter={() => {
+                            console.log('🖱️ [DEBUG] Mouse enter on download button for:', invoice.pdfFileName);
+                            handlePdfHoverStart(invoice);
+                          }}
+                          onMouseLeave={() => {
+                            console.log('🖱️ [DEBUG] Mouse leave on download button');
+                            handlePdfHoverEnd();
+                          }}
+                          className="pdf-download-btn hover-trigger"
+                          title={`Download: ${invoice.pdfFileName || 'invoice.pdf'} (Hover to preview)`}
                           disabled={deletingPdfs.has(invoice.id)}
                         >
-                          ⤵ Download
+                          📄 Download
                         </button>
                         <button
                           onClick={() => handlePdfDelete(invoice)}
@@ -554,9 +622,7 @@ export const InvoiceViewer: React.FC = () => {
                           title={`Delete: ${invoice.pdfFileName || 'invoice.pdf'}`}
                           disabled={deletingPdfs.has(invoice.id)}
                         >
-                          <span className={deletingPdfs.has(invoice.id) ? 'unicode-spinner' : ''}>
-                            {deletingPdfs.has(invoice.id) ? '🔄' : '🗑️'}
-                          </span>
+                          {deletingPdfs.has(invoice.id) ? '🔄' : '🗑️'}
                         </button>
                       </div>
                       <div className="pdf-info">
@@ -570,7 +636,7 @@ export const InvoiceViewer: React.FC = () => {
                     <div className="pdf-upload">
                       {uploadingPdfs.has(invoice.id) ? (
                         <div className="pdf-uploading">
-                          <div className="upload-spinner">↻</div>
+                          <div className="upload-spinner">📤</div>
                           <div className="upload-progress">
                             {pdfUploadProgress[invoice.id] || 0}%
                           </div>
@@ -595,7 +661,7 @@ export const InvoiceViewer: React.FC = () => {
                             className="pdf-upload-btn"
                             title="Upload PDF document for this invoice"
                           >
-                            ⤴ Upload PDF
+                            📤 Upload PDF
                           </label>
                         </>
                       )}
@@ -643,6 +709,48 @@ export const InvoiceViewer: React.FC = () => {
           >
             Next →
           </button>
+        </div>
+      )}
+
+      {/* PDF Viewer Modal */}
+      {viewingPdf && (
+        <>
+          <div style={{ 
+            position: 'fixed', 
+            top: 0, 
+            left: 0, 
+            width: '100%', 
+            height: '100%', 
+            background: 'rgba(255,0,0,0.1)', 
+            zIndex: 999 
+          }}>
+            Debug: PDF Viewer should appear - {viewingPdf.fileName}
+          </div>
+          <PDFViewer
+            pdfS3Key={viewingPdf.s3Key}
+            fileName={viewingPdf.fileName}
+            isVisible={!!viewingPdf}
+            onClose={closePdfViewer}
+          />
+        </>
+      )}
+
+      {/* Debug: Show current viewing state */}
+      {process.env.NODE_ENV === 'development' && (
+        <div style={{
+          position: 'fixed',
+          top: '10px',
+          right: '10px',
+          background: 'rgba(0,0,0,0.8)',
+          color: 'white',
+          padding: '10px',
+          borderRadius: '4px',
+          fontSize: '12px',
+          zIndex: 1001
+        }}>
+          Viewing PDF: {viewingPdf ? 'YES' : 'NO'}
+          {viewingPdf && <div>File: {viewingPdf.fileName}</div>}
+          <div>Hover timeout: {hoverTimeout ? 'SET' : 'NONE'}</div>
         </div>
       )}
 
@@ -730,14 +838,6 @@ export const InvoiceViewer: React.FC = () => {
           font-weight: 500;
         }
 
-        .card-breakdown .valid-symbol {
-          color: #059669;
-        }
-
-        .card-breakdown .invalid-symbol {
-          color: #dc2626;
-        }
-
         .results-summary {
           margin-bottom: 15px;
           display: flex;
@@ -797,7 +897,7 @@ export const InvoiceViewer: React.FC = () => {
         .invoice-table {
           width: 100%;
           border-collapse: collapse;
-          min-width: 1400px; /* Reduced from 1500px since we removed view button */
+          min-width: 1450px; /* Increased for enhanced PDF column */
           table-layout: auto;
         }
 
@@ -920,11 +1020,6 @@ export const InvoiceViewer: React.FC = () => {
           color: #065f46;
         }
 
-        .format-badge.valid::before {
-          content: '';
-          margin-right: 2px;
-        }
-
         .format-badge.invalid {
           background: #fee2e2;
           color: #dc2626;
@@ -999,8 +1094,7 @@ export const InvoiceViewer: React.FC = () => {
           justify-content: center;
         }
 
-        .pdf-download-btn, 
-        .pdf-delete-btn {
+        .pdf-download-btn, .pdf-delete-btn {
           padding: 4px 8px;
           border: none;
           border-radius: 4px;
@@ -1014,6 +1108,11 @@ export const InvoiceViewer: React.FC = () => {
           min-width: 70px;
           justify-content: center;
           position: relative;
+        }
+
+        .pdf-download-btn.hover-trigger:hover {
+          transform: scale(1.05);
+          box-shadow: 0 2px 4px rgba(50, 179, 231, 0.3);
         }
 
         .pdf-download-btn {
@@ -1094,7 +1193,7 @@ export const InvoiceViewer: React.FC = () => {
 
         .upload-spinner {
           font-size: 16px;
-          animation: spin 1.5s linear infinite;
+          animation: pulse 1.5s ease-in-out infinite;
         }
 
         .upload-progress {
@@ -1103,14 +1202,10 @@ export const InvoiceViewer: React.FC = () => {
           font-weight: 600;
         }
 
-        .unicode-spinner {
-          display: inline-block;
-          animation: spin 1s linear infinite;
-        }
-
-        @keyframes spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
+        @keyframes pulse {
+          0% { opacity: 1; }
+          50% { opacity: 0.5; }
+          100% { opacity: 1; }
         }
 
         .pdf-disabled {
@@ -1208,13 +1303,13 @@ export const InvoiceViewer: React.FC = () => {
           .pdf-upload-btn,
           .pdf-download-btn,
           .pdf-delete-btn {
-            padding: 4px 8px;
-            font-size: 10px;
+            padding: 3px 6px;
+            font-size: 9px;
             min-width: 50px;
           }
 
           .pdf-buttons {
-            gap: 3px;
+            gap: 2px;
           }
 
           .validation-tooltip {
