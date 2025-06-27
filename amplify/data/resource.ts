@@ -1,4 +1,4 @@
-// amplify/data/resource.ts - Updated with PDF support
+// amplify/data/resource.ts - Updated with full PDF path support
 import { type ClientSchema, a, defineData } from "@aws-amplify/backend";
 
 const schema = a.schema({
@@ -38,10 +38,12 @@ const schema = a.schema({
     uploadJob: a.belongsTo('InvoiceUploadJob', 'uploadJobId'),
     isValid: a.boolean(),
     validationErrors: a.string().array(),
-    // ✅ NEW: PDF document storage
-    pdfS3Key: a.string(), // S3 path to the PDF file
+    // PDF document storage
+    pdfS3Key: a.string(), // Relative S3 path (user-files/identity/invoices/...)
     pdfFileName: a.string(), // Original filename for display
     pdfUploadedAt: a.datetime(), // When PDF was uploaded
+    // ✅ NEW: Full S3 bucket path for backend storage
+    pdfS3FullPath: a.string(), // Complete path including bucket name
   })
   .authorization(allow => [
     allow.authenticated()

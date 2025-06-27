@@ -1,4 +1,4 @@
-// components/UploadStore.tsx - Simplified with upload logo and no processing history
+// components/UploadStore.tsx - Final version with PDF cascade deletion
 import React, { useState, useEffect, useCallback } from 'react';
 import { uploadData, list, remove, getUrl } from 'aws-amplify/storage';
 import { generateClient } from 'aws-amplify/data';
@@ -11,6 +11,7 @@ const client = generateClient<Schema>();
 declare global {
   interface Window {
     refreshInvoiceViewer?: () => void;
+    activateInvoiceAutoRefresh?: () => void;
   }
 }
 
@@ -509,6 +510,22 @@ export const UploadStore: React.FC = () => {
       event.target.value = '';
       console.log('🧹 [DEBUG] File input cleared');
       
+      // ✅ NEW: Trigger auto-refresh for invoice viewer
+      console.log('🚀 [DEBUG] Triggering invoice viewer auto-refresh for CSV processing...');
+      if (window.activateInvoiceAutoRefresh) {
+        window.activateInvoiceAutoRefresh();
+        console.log('✅ [DEBUG] Invoice auto-refresh activated - invoices will refresh automatically');
+      } else {
+        // Fallback to regular refresh
+        console.log('🔄 [DEBUG] Auto-refresh not available, using regular refresh...');
+        if (window.refreshInvoiceViewer) {
+          window.refreshInvoiceViewer();
+          console.log('✅ [DEBUG] Regular invoice viewer refresh triggered');
+        } else {
+          console.warn('⚠️ [DEBUG] Invoice viewer refresh function not available');
+        }
+      }
+      
     } catch (err) {
       console.error('💥 [DEBUG] Error during cleanup:', err);
       setError('Some files failed to process');
@@ -518,7 +535,7 @@ export const UploadStore: React.FC = () => {
   const handleDeleteFile = async (filePath: string) => {
     const fileName = getFileName(filePath);
     
-    if (!window.confirm(`Are you sure you want to delete "${fileName}"?\n\nThis will also delete all associated invoice data from the database. This action cannot be undone.`)) {
+    if (!window.confirm(`Are you sure you want to delete "${fileName}"?\n\nThis will also delete all associated invoice data AND PDF files from the database and storage. This action cannot be undone.`)) {
       return;
     }
 
@@ -546,7 +563,7 @@ export const UploadStore: React.FC = () => {
       const associatedJobs = jobsResult.data || [];
       console.log('📊 [DEBUG] Found associated jobs:', associatedJobs.length);
 
-      // Step 2: For each job, delete all associated invoices and then the job itself
+      // Step 2: For each job, delete all associated PDFs, then invoices, then the job itself
       for (const job of associatedJobs) {
         console.log(`🔄 [DEBUG] Processing job: ${job.id} (${job.fileName})`);
         
@@ -567,6 +584,32 @@ export const UploadStore: React.FC = () => {
 
         const associatedInvoices = invoicesResult.data || [];
         console.log(`📋 [DEBUG] Found ${associatedInvoices.length} invoices to delete for job ${job.id}`);
+
+        // ✅ NEW: Delete associated PDFs from S3 first
+        const invoicesWithPdfs = associatedInvoices.filter(invoice => invoice.pdfS3Key);
+        console.log(`📄 [DEBUG] Found ${invoicesWithPdfs.length} invoices with PDFs to delete`);
+
+        if (invoicesWithPdfs.length > 0) {
+          console.log('🗑️ [DEBUG] Deleting associated PDF files from S3...');
+          
+          for (const invoice of invoicesWithPdfs) {
+            try {
+              console.log(`🗑️ [DEBUG] Deleting PDF for invoice ${invoice.invoiceId}: ${invoice.pdfS3Key}`);
+              console.log(`📄 [DEBUG] PDF filename: ${invoice.pdfFileName}`);
+              console.log(`📄 [DEBUG] Full S3 path: ${invoice.pdfS3FullPath}`);
+              
+              // Delete PDF from S3 using the relative path
+              await remove({
+                path: invoice.pdfS3Key!
+              });
+              
+              console.log(`✅ [DEBUG] Successfully deleted PDF: ${invoice.pdfS3Key}`);
+            } catch (error) {
+              console.error(`❌ [DEBUG] Failed to delete PDF ${invoice.pdfS3Key}:`, error);
+              // Continue with other deletions even if one PDF fails
+            }
+          }
+        }
 
         // Delete all associated invoices
         if (associatedInvoices.length > 0) {

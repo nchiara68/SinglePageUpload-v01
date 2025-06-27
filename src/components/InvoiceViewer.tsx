@@ -1,4 +1,4 @@
-// components/InvoiceViewer.tsx - Without PDF viewer functionality
+// components/InvoiceViewer.tsx - Updated with Maturity Days column and corrected Days to Due Date
 import React, { useState, useEffect, useMemo } from 'react';
 import { generateClient } from 'aws-amplify/data';
 import { uploadData, getUrl } from 'aws-amplify/storage';
@@ -6,7 +6,7 @@ import type { Schema } from '../../amplify/data/resource';
 
 const client = generateClient<Schema>();
 
-type SortableField = 'issueDate' | 'dueDate' | 'amount' | 'daysToDueDate' | 'invoiceId' | 'sellerId' | 'debtorId' | 'product' | 'currency' | 'format' | 'pdfDocument';
+type SortableField = 'issueDate' | 'dueDate' | 'amount' | 'daysToDueDate' | 'maturityDays' | 'invoiceId' | 'sellerId' | 'debtorId' | 'product' | 'currency' | 'format' | 'pdfDocument';
 
 // Extend Window interface to include our refresh function
 declare global {
@@ -28,6 +28,61 @@ export const InvoiceViewer: React.FC = () => {
   const [pdfUploadProgress, setPdfUploadProgress] = useState<Record<string, number>>({});
   const [deletingPdfs, setDeletingPdfs] = useState<Set<string>>(new Set());
   const itemsPerPage = 20;
+
+  // Helper function to get S3 bucket name from Amplify configuration
+  const getS3BucketName = (): string => {
+    try {
+      // Option 1: Get from Amplify configuration outputs (Gen 2)
+      if (window.amplifyConfig?.storage?.bucket_name) {
+        console.log('✅ [DEBUG] Got bucket name from Amplify outputs:', window.amplifyConfig.storage.bucket_name);
+        return window.amplifyConfig.storage.bucket_name;
+      }
+
+      // Option 2: Try to extract from Amplify's internal storage configuration
+      if (typeof window !== 'undefined') {
+        const amplifyConfigStorage = localStorage.getItem('amplify-storage-config');
+        if (amplifyConfigStorage) {
+          try {
+            const storageConfig = JSON.parse(amplifyConfigStorage) as { bucket?: string };
+            if (storageConfig.bucket) {
+              console.log('✅ [DEBUG] Got bucket name from storage config:', storageConfig.bucket);
+              return storageConfig.bucket;
+            }
+          } catch (parseError) {
+            console.warn('⚠️ [DEBUG] Failed to parse storage config from localStorage');
+          }
+        }
+      }
+
+      // Option 3: Get from cached bucket name (if we've uploaded before)
+      const cachedBucketName = sessionStorage.getItem('amplify-bucket-name');
+      if (cachedBucketName) {
+        console.log('✅ [DEBUG] Got bucket name from cache:', cachedBucketName);
+        return cachedBucketName;
+      }
+
+      // Option 4: Dynamic extraction from upload results
+      console.log('ℹ️ [DEBUG] Bucket name will be extracted from first upload result');
+      return 'DYNAMIC_EXTRACTION';
+      
+    } catch (error) {
+      console.error('❌ [DEBUG] Error getting bucket name:', error);
+      return 'DYNAMIC_EXTRACTION';
+    }
+  };
+
+  // Helper function to construct full S3 path
+  const constructFullS3Path = (relativePath: string, bucketName?: string): string => {
+    // If we have a bucket name from configuration, use it
+    if (bucketName && bucketName !== 'DYNAMIC_EXTRACTION') {
+      return `${bucketName}/${relativePath}`;
+    }
+
+    // Dynamic extraction: try to extract bucket name from a sample upload path
+    // Amplify upload paths typically include the bucket name in the result
+    // We'll extract it when we get the upload result
+    return relativePath; // Will be updated after upload
+  };
 
   // Manual refresh function
   const refreshInvoices = async () => {
@@ -111,11 +166,24 @@ export const InvoiceViewer: React.FC = () => {
     };
   }, [invoices]);
 
-  // Calculate days between issue date and due date
-  const calculateDaysToDueDate = (issueDate: string, dueDate: string): number => {
+  // Calculate maturity days: Due Date - Issue Date
+  const calculateMaturityDays = (issueDate: string, dueDate: string): number => {
     const issue = new Date(issueDate);
     const due = new Date(dueDate);
     const diffTime = due.getTime() - issue.getTime();
+    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  };
+
+  // Calculate days to due date: Due Date - Today's Date
+  const calculateDaysToDueDate = (dueDate: string): number => {
+    const today = new Date();
+    const due = new Date(dueDate);
+    
+    // Reset time to midnight for both dates to get accurate day difference
+    today.setHours(0, 0, 0, 0);
+    due.setHours(0, 0, 0, 0);
+    
+    const diffTime = due.getTime() - today.getTime();
     return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   };
 
@@ -143,8 +211,12 @@ export const InvoiceViewer: React.FC = () => {
           bValue = new Date(b.issueDate).getTime();
           break;
         case 'daysToDueDate':
-          aValue = calculateDaysToDueDate(a.issueDate, a.dueDate);
-          bValue = calculateDaysToDueDate(b.issueDate, b.dueDate);
+          aValue = calculateDaysToDueDate(a.dueDate);
+          bValue = calculateDaysToDueDate(b.dueDate);
+          break;
+        case 'maturityDays':
+          aValue = calculateMaturityDays(a.issueDate, a.dueDate);
+          bValue = calculateMaturityDays(b.issueDate, b.dueDate);
           break;
         case 'invoiceId':
           aValue = a.invoiceId.toLowerCase();
@@ -223,7 +295,26 @@ export const InvoiceViewer: React.FC = () => {
     return errors.filter((error): error is string => error !== null).join('; ');
   };
 
-  // PDF Upload Handler
+  // Helper function to format days with context
+  const formatDaysToDueDate = (days: number): string => {
+    if (days > 0) {
+      return `${days} days`;
+    } else if (days === 0) {
+      return 'Today';
+    } else {
+      return `${Math.abs(days)} days overdue`;
+    }
+  };
+
+  // Helper function to get CSS class for days to due date
+  const getDaysToDueDateClass = (days: number): string => {
+    if (days < 0) return 'overdue';
+    if (days === 0) return 'due-today';
+    if (days <= 7) return 'due-soon';
+    return 'due-normal';
+  };
+
+  // PDF Upload Handler - Updated with enhanced debugging
   const handlePdfUpload = async (invoiceId: string, file: File) => {
     if (!file.type.includes('pdf')) {
       alert('Please select a PDF file');
@@ -235,48 +326,169 @@ export const InvoiceViewer: React.FC = () => {
 
     try {
       console.log('📄 [DEBUG] Starting PDF upload for invoice:', invoiceId);
+      console.log('📄 [DEBUG] File details:', { name: file.name, size: file.size, type: file.type });
+      
+      // Verify the invoice exists before uploading
+      console.log('🔍 [DEBUG] Verifying invoice exists in database...');
+      const existingInvoice = invoices.find(inv => inv.id === invoiceId);
+      if (!existingInvoice) {
+        throw new Error(`Invoice with ID ${invoiceId} not found in current invoice list`);
+      }
+      console.log('✅ [DEBUG] Invoice found:', { id: existingInvoice.id, invoiceId: existingInvoice.invoiceId });
       
       // Generate unique S3 key for the PDF
       const timestamp = Date.now();
       const sanitizedFileName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
       const s3Key = `user-files/{identityId}/invoices/${invoiceId}/${timestamp}-${sanitizedFileName}`;
       
+      console.log('📄 [DEBUG] Generated S3 key template:', s3Key);
+      
       // Upload to S3
       const uploadResult = await uploadData({
-        path: ({ identityId }) => s3Key.replace('{identityId}', identityId || ''),
+        path: ({ identityId }) => {
+          const fullPath = s3Key.replace('{identityId}', identityId || '');
+          console.log('📄 [DEBUG] Upload path:', fullPath);
+          console.log('📄 [DEBUG] Identity ID:', identityId);
+          return fullPath;
+        },
         data: file,
         options: {
           onProgress: ({ transferredBytes, totalBytes }) => {
             if (totalBytes) {
               const progress = Math.round((transferredBytes / totalBytes) * 100);
+              console.log('📄 [DEBUG] Upload progress:', progress + '%');
               setPdfUploadProgress(prev => ({ ...prev, [invoiceId]: progress }));
             }
           },
         },
       }).result;
 
-      console.log('✅ [DEBUG] PDF uploaded successfully:', uploadResult.path);
+      console.log('✅ [DEBUG] PDF uploaded successfully to S3');
+      console.log('📄 [DEBUG] Upload result:', uploadResult);
+      console.log('📄 [DEBUG] Upload result path:', uploadResult.path);
+      
+      // Get bucket name dynamically
+      const configBucketName = getS3BucketName();
+      let fullS3Path: string;
+      
+      if (configBucketName && configBucketName !== 'DYNAMIC_EXTRACTION') {
+        // Use bucket name from configuration
+        fullS3Path = constructFullS3Path(uploadResult.path, configBucketName);
+        console.log('📄 [DEBUG] Full S3 path from config:', fullS3Path);
+      } else {
+        // Extract bucket name from upload result
+        console.log('📄 [DEBUG] Attempting to extract bucket name from upload result...');
+        
+        // Amplify Gen 2 upload results might contain the full URL
+        // Let's try to extract bucket name from various sources
+        let extractedBucketName: string | null = null;
+        
+        // Method 1: Check if upload result has additional metadata
+        interface UploadResultExtended {
+          path: string;
+          key?: string;
+          bucket?: string;
+          url?: string;
+        }
+        
+        const uploadResultFull = uploadResult as UploadResultExtended;
+        console.log('📄 [DEBUG] Full upload result structure:', JSON.stringify(uploadResultFull, null, 2));
+        
+        // Method 2: Try to get a signed URL to extract bucket name
+        try {
+          console.log('📄 [DEBUG] Generating URL for bucket extraction...');
+          const testUrl = await getUrl({
+            path: uploadResult.path,
+            options: { expiresIn: 60 }
+          });
+          
+          const urlString = testUrl.url.toString();
+          console.log('📄 [DEBUG] Generated URL for bucket extraction:', urlString);
+          
+          // Extract bucket name from S3 URL format: https://bucket-name.s3.region.amazonaws.com/...
+          const bucketMatch = urlString.match(/https:\/\/([^.]+)\.s3\./);
+          if (bucketMatch) {
+            extractedBucketName = bucketMatch[1];
+            console.log('✅ [DEBUG] Extracted bucket name from URL:', extractedBucketName);
+            
+            // Cache it for future use
+            sessionStorage.setItem('amplify-bucket-name', extractedBucketName);
+          } else {
+            console.warn('⚠️ [DEBUG] Could not extract bucket name from URL pattern');
+          }
+        } catch (urlError) {
+          console.error('❌ [DEBUG] Could not generate URL for bucket extraction:', urlError);
+        }
+        
+        if (extractedBucketName) {
+          fullS3Path = `${extractedBucketName}/${uploadResult.path}`;
+          console.log('📄 [DEBUG] Full S3 path extracted dynamically:', fullS3Path);
+        } else {
+          // Final fallback: use a descriptive placeholder
+          fullS3Path = `AMPLIFY_BUCKET_${Date.now()}/${uploadResult.path}`;
+          console.warn('⚠️ [DEBUG] Using timestamped placeholder bucket name:', fullS3Path);
+        }
+      }
+      
+      console.log('📄 [DEBUG] Final paths:');
+      console.log('📄 [DEBUG] - Relative S3 path:', uploadResult.path);
+      console.log('📄 [DEBUG] - Full S3 path:', fullS3Path);
+      console.log('📄 [DEBUG] - PDF filename:', file.name);
 
-      // Update the Invoice record with PDF info
-      const updateResult = await client.models.Invoice.update({
+      // Update the Invoice record with PDF info including full path
+      console.log('💾 [DEBUG] Starting database update for invoice:', invoiceId);
+      console.log('💾 [DEBUG] Update payload:', {
         id: invoiceId,
         pdfS3Key: uploadResult.path,
+        pdfS3FullPath: fullS3Path,
+        pdfFileName: file.name,
+        pdfUploadedAt: new Date().toISOString()
+      });
+      
+      const updateResult = await client.models.Invoice.update({
+        id: invoiceId,
+        pdfS3Key: uploadResult.path, // Relative path for app functionality
+        pdfS3FullPath: fullS3Path, // Full path including bucket name (stored but not displayed)
         pdfFileName: file.name,
         pdfUploadedAt: new Date().toISOString(),
       });
 
+      console.log('💾 [DEBUG] Database update result:', updateResult);
+
       if (updateResult.errors) {
-        console.error('❌ [DEBUG] Failed to update invoice with PDF info:', updateResult.errors);
-        throw new Error('Failed to save PDF information');
+        console.error('❌ [DEBUG] Failed to update invoice with PDF info:');
+        updateResult.errors.forEach((error, index) => {
+          console.error(`❌ [DEBUG] Error ${index + 1}:`, {
+            message: error.message,
+            path: error.path,
+            errorType: error.errorType,
+            extensions: error.extensions
+          });
+        });
+        throw new Error(`Failed to save PDF information: ${updateResult.errors[0]?.message || 'Unknown error'}`);
+      }
+
+      if (!updateResult.data) {
+        console.error('❌ [DEBUG] Update succeeded but no data returned');
+        throw new Error('Database update returned no data');
       }
 
       console.log('✅ [DEBUG] Invoice updated with PDF info successfully');
+      console.log('💾 [DEBUG] Updated invoice data:', updateResult.data);
+      console.log('📄 [DEBUG] Stored paths - Relative:', uploadResult.path, 'Full:', fullS3Path);
       
-      // Refresh the invoice list
-      refreshInvoices();
+      // Refresh the invoice list to show the updated data
+      console.log('🔄 [DEBUG] Refreshing invoice list...');
+      await refreshInvoices();
+      console.log('✅ [DEBUG] Invoice list refreshed');
       
     } catch (error) {
-      console.error('💥 [DEBUG] PDF upload failed:', error);
+      console.error('💥 [DEBUG] PDF upload failed with error:', error);
+      console.error('💥 [DEBUG] Error details:', {
+        message: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+        name: error instanceof Error ? error.name : undefined
+      });
       alert(`Failed to upload PDF: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setUploadingPdfs(prev => {
@@ -298,9 +510,10 @@ export const InvoiceViewer: React.FC = () => {
 
     try {
       console.log('📄 [DEBUG] Getting download URL for PDF:', invoice.pdfS3Key);
+      console.log('📄 [DEBUG] Full S3 path (not used for download):', invoice.pdfS3FullPath);
       
       const downloadUrl = await getUrl({
-        path: invoice.pdfS3Key,
+        path: invoice.pdfS3Key, // Use relative path for download
         options: {
           expiresIn: 3600, // URL expires in 1 hour
         },
@@ -315,7 +528,7 @@ export const InvoiceViewer: React.FC = () => {
     }
   };
 
-  // PDF Delete Handler
+  // PDF Delete Handler - Updated to clear both path fields
   const handlePdfDelete = async (invoice: Schema["Invoice"]["type"]) => {
     if (!invoice.pdfS3Key || !invoice.id) return;
 
@@ -329,11 +542,13 @@ export const InvoiceViewer: React.FC = () => {
 
     try {
       console.log('🗑️ [DEBUG] Starting PDF deletion for invoice:', invoice.id);
+      console.log('🗑️ [DEBUG] Removing paths - Relative:', invoice.pdfS3Key, 'Full:', invoice.pdfS3FullPath);
       
-      // Update the Invoice record to remove PDF info
+      // Update the Invoice record to remove PDF info (both paths)
       const updateResult = await client.models.Invoice.update({
         id: invoice.id,
         pdfS3Key: null,
+        pdfS3FullPath: null, // Clear the full path as well
         pdfFileName: null,
         pdfUploadedAt: null,
       });
@@ -452,8 +667,16 @@ export const InvoiceViewer: React.FC = () => {
                 Due Date {sortBy === 'dueDate' && (sortDirection === 'asc' ? '↑' : '↓')}
               </th>
               <th 
+                className={`sortable ${sortBy === 'maturityDays' ? 'active' : ''}`}
+                onClick={() => handleSort('maturityDays')}
+                title="Payment terms: Number of days between Issue Date and Due Date"
+              >
+                Maturity Days {sortBy === 'maturityDays' && (sortDirection === 'asc' ? '↑' : '↓')}
+              </th>
+              <th 
                 className={`sortable ${sortBy === 'daysToDueDate' ? 'active' : ''}`}
                 onClick={() => handleSort('daysToDueDate')}
+                title="Payment status: Days remaining until due date (negative = overdue)"
               >
                 Days To Due Date {sortBy === 'daysToDueDate' && (sortDirection === 'asc' ? '↑' : '↓')}
               </th>
@@ -604,8 +827,11 @@ export const InvoiceViewer: React.FC = () => {
                 </td>
                 <td>{formatDate(invoice.issueDate)}</td>
                 <td>{formatDate(invoice.dueDate)}</td>
-                <td className="days-to-due-cell">
-                  {calculateDaysToDueDate(invoice.issueDate, invoice.dueDate)}
+                <td className="maturity-days-cell">
+                  {calculateMaturityDays(invoice.issueDate, invoice.dueDate)}
+                </td>
+                <td className={`days-to-due-cell ${getDaysToDueDateClass(calculateDaysToDueDate(invoice.dueDate))}`}>
+                  {formatDaysToDueDate(calculateDaysToDueDate(invoice.dueDate))}
                 </td>
                 <td className="invoice-id">{invoice.invoiceId}</td>
                 <td className="seller-id">{invoice.sellerId}</td>
@@ -797,7 +1023,7 @@ export const InvoiceViewer: React.FC = () => {
         .invoice-table {
           width: 100%;
           border-collapse: collapse;
-          min-width: 1400px; /* Reduced from 1500px since we removed view button */
+          min-width: 1600px; /* Increased from 1400px for new column */
           table-layout: auto;
         }
 
@@ -894,10 +1120,38 @@ export const InvoiceViewer: React.FC = () => {
           color: #32b3e7;
         }
 
-        .days-to-due-cell {
+        .maturity-days-cell {
           text-align: center;
           font-weight: 500;
           color: #5e6e77;
+          min-width: 80px;
+        }
+
+        .days-to-due-cell {
+          text-align: center;
+          font-weight: 500;
+          min-width: 120px;
+        }
+
+        .days-to-due-cell.due-normal {
+          color: #5e6e77;
+        }
+
+        .days-to-due-cell.due-soon {
+          color: #d97706;
+          font-weight: 600;
+        }
+
+        .days-to-due-cell.due-today {
+          color: #dc2626;
+          font-weight: 700;
+          background: #fef2f2;
+        }
+
+        .days-to-due-cell.overdue {
+          color: #dc2626;
+          font-weight: 700;
+          background: #fef2f2;
         }
 
         .format-cell {
@@ -1220,12 +1474,23 @@ export const InvoiceViewer: React.FC = () => {
           .validation-tooltip {
             width: 250px;
           }
+
+          .maturity-days-cell,
+          .days-to-due-cell {
+            min-width: 60px;
+          }
         }
 
         @media (max-width: 480px) {
           .validation-tooltip {
             width: 200px;
             font-size: 11px;
+          }
+
+          .maturity-days-cell,
+          .days-to-due-cell {
+            min-width: 50px;
+            font-size: 12px;
           }
         }
       `}</style>

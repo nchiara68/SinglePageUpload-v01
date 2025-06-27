@@ -1,14 +1,23 @@
-// amplify/backend.ts - SIMPLIFIED
+// amplify/backend.ts - Updated to expose bucket name (Gen 2 compatible)
 import { defineBackend } from '@aws-amplify/backend';
 import { auth } from './auth/resource';
 import { data } from './data/resource';
 import { storage } from './storage/resource';
 
-const backend = defineBackend({
+// Define and configure the backend
+export const backend = defineBackend({
   auth,
   data,
   storage,
-  // ✅ No function to register
 });
 
-// ✅ No grants needed - frontend handles everything
+// ✅ Expose the storage bucket name for frontend access
+backend.addOutput({
+  storage: {
+    aws_region: backend.auth.resources.userPool.stack.region,
+    bucket_name: backend.storage.resources.bucket.bucketName,
+  },
+});
+
+// Ensure backend is properly exported and used
+export default backend;
