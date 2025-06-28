@@ -1,4 +1,4 @@
-// components/UploadStore.tsx - Updated with clear files functionality
+// components/UploadStore.tsx - Final version with PDF cascade deletion
 import React, { useState, useEffect, useCallback } from 'react';
 import { uploadData, list, remove, getUrl } from 'aws-amplify/storage';
 import { generateClient } from 'aws-amplify/data';
@@ -12,7 +12,6 @@ declare global {
   interface Window {
     refreshInvoiceViewer?: () => void;
     activateInvoiceAutoRefresh?: () => void;
-    clearUploadedFiles?: () => void; // NEW: Add clear files function
   }
 }
 
@@ -88,37 +87,9 @@ export const UploadStore: React.FC = () => {
     }
   }, []);
 
-  // NEW: Clear files list function
-  const clearFilesList = useCallback(() => {
-    console.log('🧹 [DEBUG] Clearing uploaded files list...');
-    setFiles([]);
-    setError(null);
-    console.log('✅ [DEBUG] Files list cleared');
-  }, []);
-
   useEffect(() => {
     loadFiles();
   }, [loadFiles]);
-
-  // Expose functions globally for other components to use
-  useEffect(() => {
-    // Store the refresh function globally so other components can call it
-    window.refreshInvoiceViewer = () => {
-      console.log('🔄 [DEBUG] External refresh triggered');
-      setTimeout(() => {
-        loadFiles();
-      }, 500); // Small delay to ensure deletion is processed
-    };
-
-    // NEW: Expose clear files function globally
-    window.clearUploadedFiles = clearFilesList;
-
-    // Cleanup
-    return () => {
-      delete window.refreshInvoiceViewer;
-      delete window.clearUploadedFiles; // NEW: Clean up the clear function
-    };
-  }, [loadFiles, clearFilesList]);
 
   // Frontend processing logic
   const processInvoiceFile = async (fileKey: string, fileName: string, progressIndex: number) => {
@@ -370,20 +341,6 @@ export const UploadStore: React.FC = () => {
 
       console.log(`🎉 [DEBUG] Processing completed successfully: ${successfulCount} successful, ${failedCount} failed`);
 
-      // ✅ ENHANCED: Trigger immediate invoice viewer refresh after processing
-      console.log('🔄 [DEBUG] Triggering immediate refresh after invoice processing...');
-      if (window.refreshInvoiceViewer) {
-        window.refreshInvoiceViewer();
-        
-        // Additional delayed refresh to ensure data propagation
-        setTimeout(() => {
-          console.log('🔄 [DEBUG] Additional refresh after processing (1000ms)...');
-          if (window.refreshInvoiceViewer) {
-            window.refreshInvoiceViewer();
-          }
-        }, 1000);
-      }
-
     } catch (error) {
       console.error('💥 [DEBUG] Error in processInvoiceFile:', {
         error: error,
@@ -519,12 +476,6 @@ export const UploadStore: React.FC = () => {
         await processInvoiceFile(result.path, file.name, index);
         console.log('✅ [DEBUG] Processing completed for:', file.name);
 
-        // ✅ ENHANCED: Immediate refresh after each file processing
-        console.log('🔄 [DEBUG] Immediate refresh after individual file processing...');
-        if (window.refreshInvoiceViewer) {
-          window.refreshInvoiceViewer();
-        }
-
       } catch (err) {
         console.error(`💥 [DEBUG] Upload/processing failed for ${file.name}:`, {
           error: err,
@@ -550,56 +501,30 @@ export const UploadStore: React.FC = () => {
         setUploadProgress([]);
       }, 3000);
       
-      // ✅ ENHANCED: Multiple file list refresh strategies
-      console.log('🔄 [DEBUG] Starting enhanced file list refresh sequence...');
-      
-      // Immediate file list reload
+      // Reload the file list
+      console.log('🔄 [DEBUG] Reloading file list...');
       await loadFiles();
-      console.log('✅ [DEBUG] Immediate file list reloaded');
-      
-      // Additional file list refreshes with delays
-      setTimeout(async () => {
-        console.log('🔄 [DEBUG] Secondary file list refresh (500ms)...');
-        await loadFiles();
-        console.log('✅ [DEBUG] Secondary file list refresh completed');
-      }, 500);
-      
-      setTimeout(async () => {
-        console.log('🔄 [DEBUG] Final file list refresh (2000ms)...');
-        await loadFiles();
-        console.log('✅ [DEBUG] Final file list refresh completed');
-      }, 2000);
+      console.log('✅ [DEBUG] File list reloaded');
       
       // Clear the file input
       event.target.value = '';
       console.log('🧹 [DEBUG] File input cleared');
       
-      // ✅ ENHANCED: Multiple refresh strategies for invoice viewer
-      console.log('🚀 [DEBUG] Triggering comprehensive invoice viewer refresh...');
-      
-      // Strategy 1: Immediate refresh
-      if (window.refreshInvoiceViewer) {
-        console.log('🔄 [DEBUG] Immediate invoice viewer refresh...');
-        window.refreshInvoiceViewer();
+      // ✅ NEW: Trigger auto-refresh for invoice viewer
+      console.log('🚀 [DEBUG] Triggering invoice viewer auto-refresh for CSV processing...');
+      if (window.activateInvoiceAutoRefresh) {
+        window.activateInvoiceAutoRefresh();
+        console.log('✅ [DEBUG] Invoice auto-refresh activated - invoices will refresh automatically');
+      } else {
+        // Fallback to regular refresh
+        console.log('🔄 [DEBUG] Auto-refresh not available, using regular refresh...');
+        if (window.refreshInvoiceViewer) {
+          window.refreshInvoiceViewer();
+          console.log('✅ [DEBUG] Regular invoice viewer refresh triggered');
+        } else {
+          console.warn('⚠️ [DEBUG] Invoice viewer refresh function not available');
+        }
       }
-      
-      // Strategy 2: Delayed refresh to ensure data propagation
-      setTimeout(() => {
-        console.log('🔄 [DEBUG] Delayed invoice viewer refresh (500ms)...');
-        if (window.refreshInvoiceViewer) {
-          window.refreshInvoiceViewer();
-        }
-      }, 500);
-      
-      // Strategy 3: Final refresh to catch any stragglers
-      setTimeout(() => {
-        console.log('🔄 [DEBUG] Final invoice viewer refresh (2000ms)...');
-        if (window.refreshInvoiceViewer) {
-          window.refreshInvoiceViewer();
-        }
-      }, 2000);
-      
-      console.log('✅ [DEBUG] Multiple invoice refresh strategies activated');
       
     } catch (err) {
       console.error('💥 [DEBUG] Error during cleanup:', err);
@@ -738,57 +663,19 @@ export const UploadStore: React.FC = () => {
       });
       console.log('✅ [DEBUG] Successfully deleted file from S3');
 
-      // Step 4: Reload the file list and refresh invoice viewer with enhanced refresh
-      console.log('🔄 [DEBUG] Starting comprehensive refresh process...');
-      
-      // Immediate file list reload
-      console.log('🔄 [DEBUG] Immediate file list reload...');
+      // Step 4: Reload the file list and refresh invoice viewer
+      console.log('🔄 [DEBUG] Reloading file list...');
       await loadFiles();
-      console.log('✅ [DEBUG] Immediate file list reloaded');
+      console.log('✅ [DEBUG] File list reloaded');
       
-      // Multiple invoice viewer refresh strategies
-      console.log('🔄 [DEBUG] Triggering multiple invoice viewer refresh strategies...');
+      // Trigger invoice viewer refresh
+      console.log('🔄 [DEBUG] Triggering invoice viewer refresh...');
       if (window.refreshInvoiceViewer) {
-        // Immediate refresh
         window.refreshInvoiceViewer();
-        
-        // Delayed refresh for data propagation
-        setTimeout(() => {
-          console.log('🔄 [DEBUG] Delayed invoice viewer refresh (500ms)...');
-          if (window.refreshInvoiceViewer) {
-            window.refreshInvoiceViewer();
-          }
-        }, 500);
-        
-        // Final refresh
-        setTimeout(() => {
-          console.log('🔄 [DEBUG] Final invoice viewer refresh (1500ms)...');
-          if (window.refreshInvoiceViewer) {
-            window.refreshInvoiceViewer();
-          }
-        }, 1500);
-        
-        console.log('✅ [DEBUG] Multiple invoice viewer refresh strategies activated');
+        console.log('✅ [DEBUG] Invoice viewer refresh triggered');
       } else {
         console.warn('⚠️ [DEBUG] Invoice viewer refresh function not available');
       }
-      
-      // Simplified auto-refresh activation
-      if (window.activateInvoiceAutoRefresh) {
-        setTimeout(() => {
-          console.log('🔄 [DEBUG] Activating simplified auto-refresh after deletion...');
-          if (window.activateInvoiceAutoRefresh) {
-            window.activateInvoiceAutoRefresh();
-          }
-        }, 1000);
-      }
-      
-      // Additional file list refresh after delay to catch any async operations
-      setTimeout(async () => {
-        console.log('🔄 [DEBUG] Additional delayed file list refresh (1000ms)...');
-        await loadFiles();
-        console.log('✅ [DEBUG] Additional file list refresh completed');
-      }, 1000);
       
       console.log('🎉 [DEBUG] File deletion process completed successfully');
       

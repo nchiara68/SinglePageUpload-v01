@@ -11,13 +11,4 @@ export const backend = defineBackend({
   storage,
 });
 
-// ✅ Expose the storage bucket name for frontend access
-backend.addOutput({
-  storage: {
-    aws_region: backend.auth.resources.userPool.stack.region,
-    bucket_name: backend.storage.resources.bucket.bucketName,
-  },
-});
-
-// Ensure backend is properly exported and used
 export default backend;
