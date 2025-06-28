@@ -1,8 +1,9 @@
-// components/InvoiceViewer.tsx - Updated with Maturity Days column and corrected Days to Due Date
+// components/InvoiceViewer.tsx - Updated with SubmitInvoices component
 import React, { useState, useEffect, useMemo } from 'react';
 import { generateClient } from 'aws-amplify/data';
 import { uploadData, getUrl } from 'aws-amplify/storage';
 import type { Schema } from '../../amplify/data/resource';
+import { SubmitInvoices } from './SubmitInvoices'; // ADD THIS IMPORT
 
 const client = generateClient<Schema>();
 
@@ -598,6 +599,13 @@ export const InvoiceViewer: React.FC = () => {
         </div>
       )}
 
+      {/* ADD THIS: Submit Invoices Component */}
+      <SubmitInvoices 
+        invoices={invoices}
+        loading={loading}
+        onRefreshInvoices={refreshInvoices}
+      />
+
       {/* Analytics Cards - Show both valid and invalid counts */}
       <div className="analytics-grid">
         <div className="analytics-card">
@@ -690,7 +698,7 @@ export const InvoiceViewer: React.FC = () => {
                 className={`sortable ${sortBy === 'sellerId' ? 'active' : ''}`}
                 onClick={() => handleSort('sellerId')}
               >
-                Seller ID {sortBy === 'sellerId' && (sortDirection === 'asc' ? '↑' : '↓')}
+                Seller ID {sortBy === 'sellerId' && (sortDirection === 'asc' ? '↓' : '↑')}
               </th>
               <th 
                 className={`sortable ${sortBy === 'debtorId' ? 'active' : ''}`}
