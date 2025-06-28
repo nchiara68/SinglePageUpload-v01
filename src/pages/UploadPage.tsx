@@ -35,7 +35,7 @@ const UploadPage: React.FC<UploadPageProps> = ({ signOut, user }) => {
       <div className="upload-page-header">
         <div className="header-content">
           <div className="header-title">
-            <span>📊</span>
+            <span></span>
             <h1>Invoice Upload Page</h1>
           </div>
           

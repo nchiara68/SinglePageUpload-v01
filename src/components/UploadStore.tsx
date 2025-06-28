@@ -1,4 +1,4 @@
-// components/UploadStore.tsx - Updated with clear files functionality
+// components/UploadStore.tsx - Enhanced with session-based permissions and fixed height
 import React, { useState, useEffect, useCallback } from 'react';
 import { uploadData, list, remove, getUrl } from 'aws-amplify/storage';
 import { generateClient } from 'aws-amplify/data';
@@ -12,7 +12,7 @@ declare global {
   interface Window {
     refreshInvoiceViewer?: () => void;
     activateInvoiceAutoRefresh?: () => void;
-    clearUploadedFiles?: () => void; // NEW: Add clear files function
+    clearUploadedFiles?: () => void;
   }
 }
 
@@ -21,6 +21,14 @@ interface FileItem {
   size?: number;
   lastModified?: Date;
   eTag?: string;
+}
+
+interface EnhancedFileItem extends FileItem {
+  isCurrentSession: boolean;
+  hasActiveInvoices: boolean;
+  hasSubmittedInvoices: boolean;
+  associatedJobId?: string;
+  processingStatus?: string;
 }
 
 interface UploadProgress {
@@ -55,17 +63,116 @@ interface CsvRow {
 }
 
 export const UploadStore: React.FC = () => {
-  const [files, setFiles] = useState<FileItem[]>([]);
+  const [files, setFiles] = useState<EnhancedFileItem[]>([]);
   const [uploadProgress, setUploadProgress] = useState<UploadProgress[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deletingFiles, setDeletingFiles] = useState<Set<string>>(new Set());
+  const [downloadingFiles, setDownloadingFiles] = useState<Set<string>>(new Set());
 
-  // Load user's files
+  // Check if a file is from current session (has active invoices vs submitted invoices)
+  const checkFileSessionStatus = async (filePath: string): Promise<{
+    isCurrentSession: boolean;
+    hasActiveInvoices: boolean;
+    hasSubmittedInvoices: boolean;
+    associatedJobId?: string;
+    processingStatus?: string;
+  }> => {
+    try {
+      console.log('🔍 [SESSION] Checking session status for file:', filePath);
+      
+      // Step 1: Find associated upload jobs
+      const jobsResult = await client.models.InvoiceUploadJob.list({
+        filter: {
+          s3Key: { eq: filePath }
+        }
+      });
+
+      if (jobsResult.errors || !jobsResult.data || jobsResult.data.length === 0) {
+        console.log('⚠️ [SESSION] No associated jobs found for file:', filePath);
+        // If no job found, assume it's a previous session file (safer default)
+        return {
+          isCurrentSession: false,
+          hasActiveInvoices: false,
+          hasSubmittedInvoices: false
+        };
+      }
+
+      const job = jobsResult.data[0];
+      console.log('📋 [SESSION] Found job:', { id: job.id, status: job.status, fileName: job.fileName });
+
+      // Step 2: Check for active invoices (in Invoice table)
+      const activeInvoicesResult = await client.models.Invoice.list({
+        filter: {
+          uploadJobId: { eq: job.id }
+        }
+      });
+
+      const hasActiveInvoices = !activeInvoicesResult.errors && 
+                               activeInvoicesResult.data && 
+                               activeInvoicesResult.data.length > 0;
+
+      console.log('📊 [SESSION] Active invoices check:', { 
+        hasActiveInvoices, 
+        count: activeInvoicesResult.data?.length || 0 
+      });
+
+      // Step 3: Check for submitted invoices (in SubmittedInvoice table)
+      const submittedInvoicesResult = await client.models.SubmittedInvoice.list({
+        filter: {
+          originalUploadJobId: { eq: job.id }
+        }
+      });
+
+      const hasSubmittedInvoices = !submittedInvoicesResult.errors && 
+                                   submittedInvoicesResult.data && 
+                                   submittedInvoicesResult.data.length > 0;
+
+      console.log('📊 [SESSION] Submitted invoices check:', { 
+        hasSubmittedInvoices, 
+        count: submittedInvoicesResult.data?.length || 0 
+      });
+
+      // File is current session ONLY if it has active invoices (not yet submitted)
+      // If there are no active invoices, it's from a previous session (even if submitted invoices exist)
+      const isCurrentSession = hasActiveInvoices;
+
+      console.log('✅ [SESSION] Final status determination:', {
+        filePath,
+        hasActiveInvoices,
+        hasSubmittedInvoices,
+        isCurrentSession, // Current session = has active invoices (regardless of submitted status)
+        jobId: job.id,
+        processingStatus: job.status,
+        logic: 'Current session = has active invoices; Previous session = no active invoices'
+      });
+
+      return {
+        isCurrentSession,
+        hasActiveInvoices,
+        hasSubmittedInvoices,
+        associatedJobId: job.id,
+        processingStatus: job.status
+      };
+
+    } catch (error) {
+      console.error('❌ [SESSION] Error checking session status:', error);
+      // Default to previous session on error for safety (prevents accidental deletion)
+      return {
+        isCurrentSession: false,
+        hasActiveInvoices: false,
+        hasSubmittedInvoices: false
+      };
+    }
+  };
+
+  // Load user's files with session status
   const loadFiles = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
+      
+      console.log('📁 [DEBUG] Loading files with session status...');
       
       const result = await list({
         path: ({ identityId }) => {
@@ -79,7 +186,46 @@ export const UploadStore: React.FC = () => {
         }
       });
 
-      setFiles(result.items || []);
+      const baseFiles = result.items || [];
+      console.log('📁 [DEBUG] Found', baseFiles.length, 'base files');
+
+      // Check session status for each file
+      const enhancedFiles: EnhancedFileItem[] = await Promise.all(
+        baseFiles.map(async (file) => {
+          const sessionStatus = await checkFileSessionStatus(file.path);
+          return {
+            ...file,
+            ...sessionStatus
+          };
+        })
+      );
+
+      console.log('📁 [DEBUG] Enhanced files with session status:', {
+        total: enhancedFiles.length,
+        currentSession: enhancedFiles.filter(f => f.isCurrentSession).length,
+        previousSession: enhancedFiles.filter(f => !f.isCurrentSession).length
+      });
+
+      // Sort files: Current session files at top, previous session files below
+      // Within each group, sort by last modified date (newest first)
+      const sortedFiles = enhancedFiles.sort((a, b) => {
+        // Primary sort: Current session files first
+        if (a.isCurrentSession && !b.isCurrentSession) return -1;
+        if (!a.isCurrentSession && b.isCurrentSession) return 1;
+        
+        // Secondary sort: Within each group, sort by date (newest first)
+        const aDate = a.lastModified?.getTime() || 0;
+        const bDate = b.lastModified?.getTime() || 0;
+        return bDate - aDate;
+      });
+
+      console.log('📁 [DEBUG] Files sorted by session and date:', {
+        sortOrder: 'Current session first, then previous session, newest first within each group',
+        currentSessionFiles: sortedFiles.filter(f => f.isCurrentSession).map(f => getFileName(f.path)),
+        previousSessionFiles: sortedFiles.filter(f => !f.isCurrentSession).map(f => getFileName(f.path))
+      });
+
+      setFiles(sortedFiles);
     } catch (err) {
       setError('Failed to load files');
       console.error('Error loading files:', err);
@@ -87,6 +233,42 @@ export const UploadStore: React.FC = () => {
       setLoading(false);
     }
   }, []);
+
+  // Download file functionality
+  const handleDownloadFile = async (filePath: string) => {
+    setDownloadingFiles(prev => new Set(prev).add(filePath));
+    
+    try {
+      console.log('📥 [DOWNLOAD] Starting download for:', filePath);
+      
+      const downloadUrl = await getUrl({
+        path: filePath,
+        options: {
+          expiresIn: 3600, // URL expires in 1 hour
+        },
+      });
+
+      // Create a temporary download link
+      const link = document.createElement('a');
+      link.href = downloadUrl.url.toString();
+      link.download = getFileName(filePath);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      console.log('✅ [DOWNLOAD] Download initiated for:', filePath);
+      
+    } catch (error) {
+      console.error('❌ [DOWNLOAD] Download failed:', error);
+      setError(`Failed to download file: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setDownloadingFiles(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(filePath);
+        return newSet;
+      });
+    }
+  };
 
   // NEW: Clear files list function
   const clearFilesList = useCallback(() => {
@@ -110,13 +292,13 @@ export const UploadStore: React.FC = () => {
       }, 500); // Small delay to ensure deletion is processed
     };
 
-    // NEW: Expose clear files function globally
+    // Expose clear files function globally
     window.clearUploadedFiles = clearFilesList;
 
     // Cleanup
     return () => {
       delete window.refreshInvoiceViewer;
-      delete window.clearUploadedFiles; // NEW: Clean up the clear function
+      delete window.clearUploadedFiles;
     };
   }, [loadFiles, clearFilesList]);
 
@@ -370,7 +552,7 @@ export const UploadStore: React.FC = () => {
 
       console.log(`🎉 [DEBUG] Processing completed successfully: ${successfulCount} successful, ${failedCount} failed`);
 
-      // ✅ ENHANCED: Trigger immediate invoice viewer refresh after processing
+      // Trigger immediate invoice viewer refresh after processing
       console.log('🔄 [DEBUG] Triggering immediate refresh after invoice processing...');
       if (window.refreshInvoiceViewer) {
         window.refreshInvoiceViewer();
@@ -519,7 +701,7 @@ export const UploadStore: React.FC = () => {
         await processInvoiceFile(result.path, file.name, index);
         console.log('✅ [DEBUG] Processing completed for:', file.name);
 
-        // ✅ ENHANCED: Immediate refresh after each file processing
+        // Immediate refresh after each file processing
         console.log('🔄 [DEBUG] Immediate refresh after individual file processing...');
         if (window.refreshInvoiceViewer) {
           window.refreshInvoiceViewer();
@@ -550,7 +732,7 @@ export const UploadStore: React.FC = () => {
         setUploadProgress([]);
       }, 3000);
       
-      // ✅ ENHANCED: Multiple file list refresh strategies
+      // Enhanced file list refresh sequence
       console.log('🔄 [DEBUG] Starting enhanced file list refresh sequence...');
       
       // Immediate file list reload
@@ -574,7 +756,7 @@ export const UploadStore: React.FC = () => {
       event.target.value = '';
       console.log('🧹 [DEBUG] File input cleared');
       
-      // ✅ ENHANCED: Multiple refresh strategies for invoice viewer
+      // Enhanced multiple refresh strategies for invoice viewer
       console.log('🚀 [DEBUG] Triggering comprehensive invoice viewer refresh...');
       
       // Strategy 1: Immediate refresh
@@ -660,7 +842,7 @@ export const UploadStore: React.FC = () => {
         const associatedInvoices = invoicesResult.data || [];
         console.log(`📋 [DEBUG] Found ${associatedInvoices.length} invoices to delete for job ${job.id}`);
 
-        // ✅ NEW: Delete associated PDFs from S3 first
+        // Delete associated PDFs from S3 first
         const invoicesWithPdfs = associatedInvoices.filter(invoice => invoice.pdfS3Key);
         console.log(`📄 [DEBUG] Found ${invoicesWithPdfs.length} invoices with PDFs to delete`);
 
@@ -1045,7 +1227,7 @@ export const UploadStore: React.FC = () => {
           id="invoice-upload"
         />
         <label htmlFor="invoice-upload" className="upload-button">
-          <div className="upload-icon">📤</div>
+          <div className="upload-icon"></div>
           <div className="upload-text">
             <h3>Upload Invoice Files</h3>
             <p>Drop CSV or Excel files here or click to browse</p>
@@ -1098,10 +1280,16 @@ export const UploadStore: React.FC = () => {
 
       <div className="files-section">
         <div className="files-header">
-          <h3>📁 Uploaded Files</h3>
-          <button onClick={loadFiles} className="refresh-btn" disabled={loading}>
-            {loading ? '🔄 Loading...' : '🔄 Refresh'}
-          </button>
+          <h3>📁 Files Manager <span className="subtitle">Uploaded Files</span></h3>
+          <div className="header-actions">
+            <div className="session-legend">
+              <span className="legend-item current-session">🟢 Current Session</span>
+              <span className="legend-item previous-session">🔒 Previous Session</span>
+            </div>
+            <button onClick={loadFiles} className="refresh-btn" disabled={loading}>
+              {loading ? '🔄 Loading...' : '🔄 Refresh'}
+            </button>
+          </div>
         </div>
 
         {loading && files.length === 0 ? (
@@ -1111,30 +1299,73 @@ export const UploadStore: React.FC = () => {
             No files found. Upload invoice files to get started!
           </div>
         ) : (
-          <div className="files-list">
-            {files.map((file) => (
-              <div key={file.path} className="file-item">
-                <div className="file-info">
-                  <div className="file-name">📄 {getFileName(file.path)}</div>
-                  <div className="file-details">
-                    <span className="file-size">{formatFileSize(file.size)}</span>
-                    {file.lastModified && (
-                      <span className="file-date">
-                        {file.lastModified.toLocaleDateString()}
-                      </span>
+          <div className="files-list-container">
+            <div className="files-list">
+              {files.map((file) => (
+                <div key={file.path} className={`file-item ${file.isCurrentSession ? 'current-session' : 'previous-session'}`}>
+                  <div className="file-info">
+                    <div className="file-header">
+                      <div className="file-name">
+                        <span className="file-icon">📄</span>
+                        {getFileName(file.path)}
+                        <span className={`session-badge ${file.isCurrentSession ? 'current' : 'previous'}`}>
+                          {file.isCurrentSession ? '🟢 Current Session' : '🔒 Previous Session'}
+                        </span>
+                      </div>
+                      <div className="file-status">
+                        {file.hasActiveInvoices && (
+                          <span className="status-badge active">📋 Active Invoices</span>
+                        )}
+                        {file.hasSubmittedInvoices && (
+                          <span className="status-badge submitted">✅ Submitted</span>
+                        )}
+                        {file.processingStatus && (
+                          <span className={`status-badge processing ${file.processingStatus.toLowerCase()}`}>
+                            {file.processingStatus}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="file-details">
+                      <span className="file-size">{formatFileSize(file.size)}</span>
+                      {file.lastModified && (
+                        <span className="file-date">
+                          {file.lastModified.toLocaleDateString()}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  
+                  <div className="file-actions">
+                    {/* Download button - always available */}
+                    <button
+                      onClick={() => handleDownloadFile(file.path)}
+                      className="download-btn"
+                      title="Download file"
+                      disabled={downloadingFiles.has(file.path)}
+                    >
+                      {downloadingFiles.has(file.path) ? '🔄 Downloading...' : '⤵ Download'}
+                    </button>
+                    
+                    {/* Delete button - only for current session files */}
+                    {file.isCurrentSession ? (
+                      <button
+                        onClick={() => handleDeleteFile(file.path)}
+                        className="delete-btn"
+                        title={deletingFiles.has(file.path) ? "Deleting file and data..." : "Delete file and all associated data"}
+                        disabled={deletingFiles.has(file.path)}
+                      >
+                        {deletingFiles.has(file.path) ? '🔄 Deleting...' : '🗑️ Delete'}
+                      </button>
+                    ) : (
+                      <div className="delete-disabled" title="Cannot delete files from previous sessions">
+                        🔒 Read-only
+                      </div>
                     )}
                   </div>
                 </div>
-                <button
-                  onClick={() => handleDeleteFile(file.path)}
-                  className="delete-btn"
-                  title={deletingFiles.has(file.path) ? "Deleting file and data..." : "Delete file and all associated data"}
-                  disabled={deletingFiles.has(file.path)}
-                >
-                  {deletingFiles.has(file.path) ? '🔄 Deleting...' : '🗑️ Delete'}
-                </button>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         )}
       </div>
@@ -1289,11 +1520,68 @@ export const UploadStore: React.FC = () => {
           justify-content: space-between;
           align-items: center;
           margin-bottom: 20px;
+          flex-wrap: wrap;
+          gap: 15px;
         }
 
         .files-header h3 {
           margin: 0;
           color: #002b4b;
+        }
+
+        .header-actions {
+          display: flex;
+          align-items: center;
+          gap: 15px;
+          flex-wrap: wrap;
+        }
+.header-titles {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.header-titles h3 {
+  margin: 0;
+  color: #002b4b;
+}
+
+.header-titles h5 {
+  margin: 0;
+  color: #5e6e77;
+  font-weight: 500;
+}
+  .subtitle {
+  font-size: 14px;
+  font-weight: 400;
+  color: #5e6e77;
+}
+
+.header-title-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+        .session-legend {
+          display: flex;
+          gap: 12px;
+          font-size: 12px;
+        }
+
+        .legend-item {
+          padding: 4px 8px;
+          border-radius: 12px;
+          font-weight: 500;
+        }
+
+        .legend-item.current-session {
+          background: #d1fae5;
+          color: #065f46;
+        }
+
+        .legend-item.previous-session {
+          background: #f3f4f6;
+          color: #374151;
         }
 
         .refresh-btn {
@@ -1324,10 +1612,20 @@ export const UploadStore: React.FC = () => {
           font-style: italic;
         }
 
+        /* FIXED HEIGHT CONTAINER WITH SCROLLING */
+        .files-list-container {
+          max-height: 350px;
+          overflow-y: auto;
+          border: 1px solid #e6f7ff;
+          border-radius: 6px;
+          background: #f8fcff;
+        }
+
         .files-list {
           display: flex;
           flex-direction: column;
-          gap: 10px;
+          gap: 2px;
+          padding: 8px;
         }
 
         .file-item {
@@ -1335,57 +1633,191 @@ export const UploadStore: React.FC = () => {
           justify-content: space-between;
           align-items: center;
           padding: 15px;
-          background: #f8fcff;
-          border: 1px solid #32b3e7;
+          background: white;
+          border: 1px solid #e6f7ff;
           border-radius: 6px;
-          transition: background 0.2s;
+          transition: all 0.2s;
+          gap: 15px;
         }
 
         .file-item:hover {
-          background: #e6f7ff;
+          background: #f0f9ff;
+          border-color: #32b3e7;
+        }
+
+        .file-item.current-session {
+          border-left: 4px solid #10b981;
+        }
+
+        .file-item.previous-session {
+          border-left: 4px solid #6b7280;
+          background: #fafafa;
         }
 
         .file-info {
           flex: 1;
+          min-width: 0;
+        }
+
+        .file-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 8px;
+          flex-wrap: wrap;
+          gap: 8px;
         }
 
         .file-name {
+          display: flex;
+          align-items: center;
+          gap: 8px;
           font-weight: 500;
           color: #002b4b;
-          margin-bottom: 5px;
+          font-size: 14px;
+        }
+
+        .file-icon {
+          font-size: 16px;
+        }
+
+        .session-badge {
+          padding: 2px 6px;
+          border-radius: 8px;
+          font-size: 10px;
+          font-weight: 600;
+          white-space: nowrap;
+        }
+
+        .session-badge.current {
+          background: #d1fae5;
+          color: #065f46;
+        }
+
+        .session-badge.previous {
+          background: #f3f4f6;
+          color: #374151;
+        }
+
+        .file-status {
+          display: flex;
+          gap: 6px;
+          flex-wrap: wrap;
+        }
+
+        .status-badge {
+          padding: 2px 6px;
+          border-radius: 8px;
+          font-size: 10px;
+          font-weight: 500;
+          white-space: nowrap;
+        }
+
+        .status-badge.active {
+          background: #dbeafe;
+          color: #1e40af;
+        }
+
+        .status-badge.submitted {
+          background: #d1fae5;
+          color: #065f46;
+        }
+
+        .status-badge.processing {
+          background: #fef3c7;
+          color: #92400e;
+        }
+
+        .status-badge.processing.completed {
+          background: #d1fae5;
+          color: #065f46;
+        }
+
+        .status-badge.processing.failed {
+          background: #fee2e2;
+          color: #dc2626;
         }
 
         .file-details {
           display: flex;
           gap: 15px;
-          font-size: 14px;
-          color: #5e6e77;
+          font-size: 12px;
+          color: #6b7280;
+        }
+
+        .file-actions {
+          display: flex;
+          gap: 8px;
+          flex-shrink: 0;
+          align-items: center;
+        }
+
+        .download-btn, .delete-btn {
+          padding: 8px 12px;
+          border: none;
+          border-radius: 4px;
+          cursor: pointer;
+          font-size: 12px;
+          font-weight: 500;
+          transition: all 0.2s;
+          white-space: nowrap;
+        }
+
+        .download-btn {
+          background: #32b3e7;
+          color: white;
+        }
+
+        .download-btn:hover:not(:disabled) {
+          background: #1a9bd8;
         }
 
         .delete-btn {
-          padding: 8px 12px;
           background: #fed7d7;
           color: #c53030;
           border: 1px solid #feb2b2;
-          border-radius: 4px;
-          cursor: pointer;
-          font-size: 14px;
-          transition: background 0.2s;
         }
 
         .delete-btn:hover:not(:disabled) {
           background: #feb2b2;
         }
 
-        .delete-btn:disabled {
+        .download-btn:disabled, .delete-btn:disabled {
           opacity: 0.6;
           cursor: not-allowed;
-          background: #f8fcff;
-          color: #5e6e77;
-          border-color: #32b3e7;
         }
 
-        @media (max-width: 600px) {
+        .delete-disabled {
+          padding: 8px 12px;
+          background: #f3f4f6;
+          color: #6b7280;
+          border: 1px solid #d1d5db;
+          border-radius: 4px;
+          font-size: 12px;
+          font-weight: 500;
+          white-space: nowrap;
+        }
+
+        /* Scrollbar Styling */
+        .files-list-container::-webkit-scrollbar {
+          width: 8px;
+        }
+
+        .files-list-container::-webkit-scrollbar-track {
+          background: #f1f5f9;
+          border-radius: 4px;
+        }
+
+        .files-list-container::-webkit-scrollbar-thumb {
+          background: #32b3e7;
+          border-radius: 4px;
+        }
+
+        .files-list-container::-webkit-scrollbar-thumb:hover {
+          background: #1a9bd8;
+        }
+
+        @media (max-width: 768px) {
           .invoice-upload {
             padding: 15px;
           }
@@ -1406,19 +1838,62 @@ export const UploadStore: React.FC = () => {
           
           .files-header {
             flex-direction: column;
-            gap: 10px;
             align-items: stretch;
+          }
+
+          .header-actions {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 10px;
+          }
+
+          .session-legend {
+            justify-content: center;
           }
           
           .file-item {
             flex-direction: column;
             align-items: stretch;
-            gap: 10px;
+            gap: 12px;
+          }
+
+          .file-header {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 8px;
+          }
+
+          .file-actions {
+            justify-content: stretch;
+            gap: 8px;
+          }
+
+          .download-btn, .delete-btn {
+            flex: 1;
+            text-align: center;
           }
           
           .file-details {
             flex-direction: column;
             gap: 5px;
+          }
+
+          .files-list-container {
+            max-height: 300px;
+          }
+        }
+
+        @media (max-width: 480px) {
+          .files-list-container {
+            max-height: 250px;
+          }
+          
+          .file-item {
+            padding: 12px;
+          }
+          
+          .session-badge, .status-badge {
+            font-size: 9px;
           }
         }
       `}</style>

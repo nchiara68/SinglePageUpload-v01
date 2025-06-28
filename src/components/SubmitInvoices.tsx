@@ -316,7 +316,9 @@ export const SubmitInvoices: React.FC<SubmitInvoicesProps> = ({
       {/* Duplicate Warning */}
       {submitButtonState.hasDuplicates && (
         <div className="duplicate-warning-message">
+            <div className="duplicate-ids">
           🚫 <strong>Cannot Submit:</strong> {submitButtonState.duplicateCount} invoice(s) already exist in submitted invoices.
+          </div>
           <div className="duplicate-ids">
             <strong>Duplicate Invoice IDs:</strong> {submitButtonState.duplicateIds.join(', ')}
           </div>
@@ -328,7 +330,7 @@ export const SubmitInvoices: React.FC<SubmitInvoicesProps> = ({
 
       <div className="submit-container">
         <div className="submit-info">
-          <h3>📤 Submit Invoices</h3>
+          <h3> Submit Invoices</h3>
           <p>
             Ready to submit {submitButtonState.validInvoices} valid invoice(s) to permanent storage.
             {submitButtonState.missingPdfs > 0 && (
@@ -353,7 +355,7 @@ export const SubmitInvoices: React.FC<SubmitInvoicesProps> = ({
             </p>
           )}
           <p className="submit-note">
-            💡 <strong>Note:</strong> Submitting will also clear your uploaded files list to keep your workspace clean.
+           💡 <strong>Note:</strong> Submitting will also clear your uploaded files list to keep your workspace clean.
           </p>
         </div>
         
@@ -364,7 +366,7 @@ export const SubmitInvoices: React.FC<SubmitInvoicesProps> = ({
             className={`submit-btn ${submitButtonState.enabled ? 'enabled' : 'disabled'}`}
             title={
               !submitButtonState.enabled && submitButtonState.hasDuplicates
-                ? `Cannot submit: ${submitButtonState.duplicateCount} invoice(s) already exist in submitted invoices`
+                ? `Cannot submit: ${submitButtonState.duplicateCount} invoice(s) has/ve been already submitted: see below`
                 : !submitButtonState.enabled && submitButtonState.missingPdfs > 0
                 ? `Upload PDF files for ${submitButtonState.missingPdfs} invoice(s) to enable submission`
                 : checkingDuplicates
@@ -435,6 +437,7 @@ export const SubmitInvoices: React.FC<SubmitInvoicesProps> = ({
         }
 
         .duplicate-warning-message {
+            font-size: 14px;
           background: #fef3c7;
           color: #92400e;
           padding: 15px;
@@ -444,6 +447,7 @@ export const SubmitInvoices: React.FC<SubmitInvoicesProps> = ({
         }
 
         .duplicate-ids {
+         font-size: 14px;
           margin-top: 8px;
           font-size: 13px;
           font-family: monospace;
@@ -454,9 +458,9 @@ export const SubmitInvoices: React.FC<SubmitInvoicesProps> = ({
 
         .duplicate-solution {
           margin-top: 8px;
-          font-size: 13px;
+          font-size: 14px;
           color: #059669;
-          background: rgba(16, 185, 129, 0.1);
+          background: rgba(0, 0, 0, 0.1);
           padding: 6px 8px;
           border-radius: 4px;
         }
