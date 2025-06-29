@@ -317,7 +317,7 @@ export const SubmitInvoices: React.FC<SubmitInvoicesProps> = ({
       {submitButtonState.hasDuplicates && (
         <div className="duplicate-warning-message">
             <div className="duplicate-ids">
-          🚫 <strong>Cannot Submit:</strong> {submitButtonState.duplicateCount} invoice(s) already exist in submitted invoices.
+          🚫 <strong>Cannot Submit:</strong> {submitButtonState.duplicateCount} invoice(s) has/ve been already submitted.
           </div>
           <div className="duplicate-ids">
             <strong>Duplicate Invoice IDs:</strong> {submitButtonState.duplicateIds.join(', ')}

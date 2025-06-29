@@ -63,7 +63,7 @@ const UploadPage: React.FC<UploadPageProps> = ({ signOut, user }) => {
           {/* Upload & Process Section */}
           <div className="section">
             <div className="section-header">
-              <h2>📤 Upload & Process</h2>
+              <h2>Start</h2>
               <p>Upload your commercial invoice files (CSV or Excel) for automated processing and analysis.</p>
             </div>
             <div className="component-wrapper">
@@ -74,7 +74,7 @@ const UploadPage: React.FC<UploadPageProps> = ({ signOut, user }) => {
           {/* View Invoices Section */}
           <div className="section">
             <div className="section-header">
-              <h2>📋 View Invoices</h2>
+              <h2>Check</h2>
               <p>Before submitting, please check that the invoices have been uploaded correctly.</p>
             </div>
             <div className="component-wrapper">
