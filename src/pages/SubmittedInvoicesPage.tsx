@@ -1,10 +1,9 @@
-// src/pages/UploadPage.tsx - Single page with upload at top and invoices below
+// src/pages/SubmittedInvoicesPage.tsx - Complete page for submitted invoices
 import React from 'react';
-import { UploadStore } from '../components/UploadPage/UploadStore';
-import { InvoiceViewer } from '../components/UploadPage/InvoiceViewer';
-import { uploadPageTheme } from '../theme';
+import { SubmittedInvoicesViewer } from '../components/SubmittedInvoicesPage/SubmittedInvoicesViewer';
+import { uploadPageTheme } from '../theme'; // Reuse your existing theme
 
-interface UploadPageProps {
+interface SubmittedInvoicesPageProps {
   signOut?: () => void;
   user?: {
     username?: string;
@@ -17,7 +16,7 @@ interface UploadPageProps {
   };
 }
 
-const UploadPage: React.FC<UploadPageProps> = ({ signOut, user }) => {
+const SubmittedInvoicesPage: React.FC<SubmittedInvoicesPageProps> = ({ signOut, user }) => {
   const getUserDisplayName = () => {
     if (!user) return 'User';
     // Prioritize email, then fallback to username/loginId
@@ -30,13 +29,13 @@ const UploadPage: React.FC<UploadPageProps> = ({ signOut, user }) => {
   }, []);
 
   return (
-    <div className="upload-page">
+    <div className="submitted-invoices-page">
       {/* Header with User Info and Sign Out */}
-      <div className="upload-page-header">
+      <div className="page-header">
         <div className="header-content">
           <div className="header-title">
             <span></span>
-            <h1>Invoice Upload Page</h1>
+            <h1>Submitted Invoices</h1>
           </div>
           
           <div className="header-actions">
@@ -60,25 +59,14 @@ const UploadPage: React.FC<UploadPageProps> = ({ signOut, user }) => {
       {/* Main Content Area */}
       <div className="page-content">
         <div className="content-container">
-          {/* Upload & Process Section */}
+          {/* Submitted Invoices Section */}
           <div className="section">
             <div className="section-header">
-              <h2>Start</h2>
-              <p>Upload your commercial invoice files (CSV or Excel) for automated processing and analysis.</p>
+              <h2>History</h2>
+              <p>Review all invoices that have been submitted and track their processing status.</p>
             </div>
             <div className="component-wrapper">
-              <UploadStore />
-            </div>
-          </div>
-
-          {/* View Invoices Section */}
-          <div className="section">
-            <div className="section-header">
-              <h2>Check</h2>
-              <p>Before submitting, please check that the invoices have been uploaded correctly.</p>
-            </div>
-            <div className="component-wrapper">
-              <InvoiceViewer />
+              <SubmittedInvoicesViewer />
             </div>
           </div>
         </div>
@@ -93,13 +81,13 @@ const UploadPage: React.FC<UploadPageProps> = ({ signOut, user }) => {
           scroll-behavior: smooth;
         }
         
-        .upload-page {
+        .submitted-invoices-page {
           scroll-margin-top: 0;
           padding-top: 0;
         }
         
         /* Override theme's sticky header positioning - keep it as is */
-        .upload-page-header {
+        .page-header {
           position: sticky !important;
           top: 0 !important;
           z-index: 100 !important;
@@ -164,14 +152,9 @@ const UploadPage: React.FC<UploadPageProps> = ({ signOut, user }) => {
           gap: 15px;
         }
         
-        /* Remove nav-tabs styles since we're not using tabs */
-        .nav-tabs {
-          display: none;
-        }
-        
         @media (max-width: 768px) {
           /* Ensure sticky header on mobile too */
-          .upload-page-header {
+          .page-header {
             position: sticky !important;
             top: 0 !important;
           }
@@ -197,4 +180,4 @@ const UploadPage: React.FC<UploadPageProps> = ({ signOut, user }) => {
   );
 };
 
-export default UploadPage;
+export default SubmittedInvoicesPage;

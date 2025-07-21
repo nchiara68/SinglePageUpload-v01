@@ -1,19 +1,46 @@
-// components/InvoiceViewer.tsx - Updated with SubmitInvoices component
+// components/InvoiceViewer.tsx - Updated with SubmitInvoices component - ENHANCED DATA LOADING - TypeScript Fixed
 import React, { useState, useEffect, useMemo } from 'react';
 import { generateClient } from 'aws-amplify/data';
 import { uploadData, getUrl } from 'aws-amplify/storage';
-import type { Schema } from '../../amplify/data/resource';
-import { SubmitInvoices } from './SubmitInvoices'; // ADD THIS IMPORT
+import type { Schema } from '../../../amplify/data/resource';
+import { SubmitInvoices } from './SubmitInvoices';
 
 const client = generateClient<Schema>();
 
 type SortableField = 'issueDate' | 'dueDate' | 'amount' | 'daysToDueDate' | 'maturityDays' | 'invoiceId' | 'sellerId' | 'debtorId' | 'product' | 'currency' | 'format' | 'pdfDocument';
 
-// Extend Window interface to include our refresh function
+// Define types for Amplify configuration
+interface AmplifyStorageConfig {
+  bucket_name?: string;
+}
+
+interface AmplifyConfig {
+  storage?: AmplifyStorageConfig;
+}
+
+interface StorageConfigItem {
+  bucket?: string;
+}
+
+// Extend Window interface to include our refresh function and amplify config
 declare global {
   interface Window {
     refreshInvoiceViewer?: () => void;
+    amplifyConfig?: AmplifyConfig;
   }
+}
+
+// Type for subscription
+interface InvoiceSubscription {
+  unsubscribe: () => void;
+}
+
+// Type for upload result with extended properties
+interface UploadResultExtended {
+  path: string;
+  key?: string;
+  bucket?: string;
+  url?: string;
 }
 
 export const InvoiceViewer: React.FC = () => {
@@ -44,7 +71,7 @@ export const InvoiceViewer: React.FC = () => {
         const amplifyConfigStorage = localStorage.getItem('amplify-storage-config');
         if (amplifyConfigStorage) {
           try {
-            const storageConfig = JSON.parse(amplifyConfigStorage) as { bucket?: string };
+            const storageConfig = JSON.parse(amplifyConfigStorage) as StorageConfigItem;
             if (storageConfig.bucket) {
               console.log('✅ [DEBUG] Got bucket name from storage config:', storageConfig.bucket);
               return storageConfig.bucket;
@@ -85,16 +112,21 @@ export const InvoiceViewer: React.FC = () => {
     return relativePath; // Will be updated after upload
   };
 
-  // Manual refresh function
-  const refreshInvoices = async () => {
+  // Enhanced manual refresh function with multiple strategies
+  const refreshInvoices = async (): Promise<void> => {
     try {
       setLoading(true);
-      console.log('🔄 [DEBUG] Manually refreshing invoices...');
+      console.log('🔄 [DEBUG] Manually refreshing invoices with enhanced strategy...');
       
+      // Strategy 1: Direct list query
       const result = await client.models.Invoice.list();
       if (result.errors) {
-        console.error('❌ [DEBUG] Error fetching invoices:', result.errors);
-        setError('Failed to refresh invoices');
+        console.error('❌ [DEBUG] Error fetching invoices via list:', result.errors);
+        
+        // Strategy 2: Fallback to observeQuery if list fails
+        console.log('🔄 [DEBUG] Falling back to observeQuery refresh...');
+        setRefreshKey(prev => prev + 1);
+        return;
       } else {
         console.log('✅ [DEBUG] Manual refresh successful, found', result.data?.length || 0, 'invoices');
         setInvoices(result.data || []);
@@ -102,42 +134,94 @@ export const InvoiceViewer: React.FC = () => {
       }
     } catch (err) {
       console.error('💥 [DEBUG] Exception during manual refresh:', err);
+      
+      // Strategy 3: Force subscription refresh on error
+      console.log('🔄 [DEBUG] Forcing subscription refresh due to error...');
+      setRefreshKey(prev => prev + 1);
       setError('Failed to refresh invoices');
     } finally {
       setLoading(false);
     }
   };
 
-  // Load invoices with real-time updates and manual refresh capability
+  // Enhanced load invoices with dual approach: subscription + manual refresh
   useEffect(() => {
-    console.log('🔄 [DEBUG] Setting up invoice subscription (refreshKey:', refreshKey, ')');
+    console.log('🔄 [DEBUG] Setting up enhanced invoice loading (refreshKey:', refreshKey, ')');
     
-    const subscription = client.models.Invoice.observeQuery().subscribe({
-      next: ({ items }) => {
-        console.log('📊 [DEBUG] Received subscription update with', items.length, 'invoices');
-        setInvoices(items);
-        setLoading(false);
-      },
-      error: (err) => {
-        console.error('❌ [DEBUG] Subscription error:', err);
-        setError('Failed to load invoices');
-        setLoading(false);
+    let subscription: InvoiceSubscription | null = null;
+    let isMounted = true;
+    
+    const setupDataLoading = async (): Promise<void> => {
+      try {
+        // Strategy 1: Initial manual load to get immediate data
+        console.log('📊 [DEBUG] Initial manual load...');
+        const initialResult = await client.models.Invoice.list();
+        
+        if (isMounted && !initialResult.errors && initialResult.data) {
+          console.log('✅ [DEBUG] Initial load successful:', initialResult.data.length, 'invoices');
+          setInvoices(initialResult.data);
+          setLoading(false);
+        }
+        
+        // Strategy 2: Setup real-time subscription for updates
+        console.log('📊 [DEBUG] Setting up real-time subscription...');
+        subscription = client.models.Invoice.observeQuery().subscribe({
+          next: ({ items, isSynced }) => {
+            if (isMounted) {
+              console.log('📊 [DEBUG] Subscription update:', {
+                itemCount: items.length,
+                isSynced,
+                refreshKey
+              });
+              setInvoices(items);
+              setLoading(false);
+            }
+          },
+          error: (err: Error) => {
+            if (isMounted) {
+              console.error('❌ [DEBUG] Subscription error:', err);
+              setError('Failed to load invoices');
+              setLoading(false);
+            }
+          }
+        });
+        
+      } catch (error) {
+        if (isMounted) {
+          console.error('💥 [DEBUG] Setup error:', error);
+          setError('Failed to initialize invoice loading');
+          setLoading(false);
+        }
       }
-    });
+    };
+    
+    // Delayed setup to allow for data propagation
+    const setupTimer = setTimeout(setupDataLoading, 100);
 
     return () => {
-      console.log('🧹 [DEBUG] Cleaning up invoice subscription');
-      subscription.unsubscribe();
+      isMounted = false;
+      clearTimeout(setupTimer);
+      if (subscription) {
+        console.log('🧹 [DEBUG] Cleaning up invoice subscription');
+        subscription.unsubscribe();
+      }
     };
   }, [refreshKey]); // Add refreshKey as dependency to force re-subscription
 
-  // Expose refresh function globally for other components to use
+  // Expose enhanced refresh function globally for other components to use
   useEffect(() => {
     // Store the refresh function globally so UploadStore can call it
     window.refreshInvoiceViewer = () => {
-      console.log('🔄 [DEBUG] External refresh triggered');
+      console.log('🔄 [DEBUG] External refresh triggered - using multiple strategies');
+      
+      // Strategy 1: Force subscription refresh
       setRefreshKey(prev => prev + 1);
-      setTimeout(refreshInvoices, 500); // Small delay to ensure deletion is processed
+      
+      // Strategy 2: Manual refresh with delay
+      setTimeout(refreshInvoices, 200);
+      
+      // Strategy 3: Additional delayed refresh for timing issues
+      setTimeout(refreshInvoices, 1000);
     };
 
     // Cleanup
@@ -269,7 +353,7 @@ export const InvoiceViewer: React.FC = () => {
 
   const totalPages = Math.ceil(sortedInvoices.length / itemsPerPage);
 
-  const handleSort = (field: SortableField) => {
+  const handleSort = (field: SortableField): void => {
     if (sortBy === field) {
       setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
     } else {
@@ -279,7 +363,7 @@ export const InvoiceViewer: React.FC = () => {
     setCurrentPage(1);
   };
 
-  const formatCurrency = (amount: number, currency: string) => {
+  const formatCurrency = (amount: number, currency: string): string => {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: currency,
@@ -287,11 +371,11 @@ export const InvoiceViewer: React.FC = () => {
     }).format(amount);
   };
 
-  const formatDate = (dateString: string) => {
+  const formatDate = (dateString: string): string => {
     return new Date(dateString).toLocaleDateString();
   };
 
-  const getValidationErrorsTooltip = (errors: (string | null)[] | null | undefined) => {
+  const getValidationErrorsTooltip = (errors: (string | null)[] | null | undefined): string => {
     if (!errors) return '';
     return errors.filter((error): error is string => error !== null).join('; ');
   };
@@ -316,7 +400,7 @@ export const InvoiceViewer: React.FC = () => {
   };
 
   // PDF Upload Handler - Updated with enhanced debugging
-  const handlePdfUpload = async (invoiceId: string, file: File) => {
+  const handlePdfUpload = async (invoiceId: string, file: File): Promise<void> => {
     if (!file.type.includes('pdf')) {
       alert('Please select a PDF file');
       return;
@@ -385,13 +469,6 @@ export const InvoiceViewer: React.FC = () => {
         let extractedBucketName: string | null = null;
         
         // Method 1: Check if upload result has additional metadata
-        interface UploadResultExtended {
-          path: string;
-          key?: string;
-          bucket?: string;
-          url?: string;
-        }
-        
         const uploadResultFull = uploadResult as UploadResultExtended;
         console.log('📄 [DEBUG] Full upload result structure:', JSON.stringify(uploadResultFull, null, 2));
         
@@ -506,7 +583,7 @@ export const InvoiceViewer: React.FC = () => {
   };
 
   // PDF Download Handler
-  const handlePdfDownload = async (invoice: Schema["Invoice"]["type"]) => {
+  const handlePdfDownload = async (invoice: Schema["Invoice"]["type"]): Promise<void> => {
     if (!invoice.pdfS3Key) return;
 
     try {
@@ -530,7 +607,7 @@ export const InvoiceViewer: React.FC = () => {
   };
 
   // PDF Delete Handler - Updated to clear both path fields
-  const handlePdfDelete = async (invoice: Schema["Invoice"]["type"]) => {
+  const handlePdfDelete = async (invoice: Schema["Invoice"]["type"]): Promise<void> => {
     if (!invoice.pdfS3Key || !invoice.id) return;
 
     const confirmDelete = window.confirm(

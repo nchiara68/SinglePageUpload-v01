@@ -1,9 +1,9 @@
-// components/UploadStore.tsx - Enhanced with session-based permissions and fixed height
+// components/UploadStore.tsx - Enhanced with session-based permissions and fixed height - CURRENT SESSION ONLY
 import React, { useState, useEffect, useCallback } from 'react';
 import { uploadData, list, remove, getUrl } from 'aws-amplify/storage';
 import { generateClient } from 'aws-amplify/data';
 import * as XLSX from 'xlsx';
-import type { Schema } from '../../amplify/data/resource';
+import type { Schema } from '../../../amplify/data/resource';
 
 const client = generateClient<Schema>();
 
@@ -101,7 +101,32 @@ export const UploadStore: React.FC = () => {
       const job = jobsResult.data[0];
       console.log('📋 [SESSION] Found job:', { id: job.id, status: job.status, fileName: job.fileName });
 
-      // Step 2: Check for active invoices (in Invoice table)
+      // Step 2: Enhanced logic for determining current session
+      // Consider a file "current session" if:
+      // 1. It has a recent processing timestamp (within last 24 hours), OR
+      // 2. It has active invoices, OR  
+      // 3. It has a job status that indicates recent activity
+
+      const now = new Date();
+      const job24HoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      
+      // Check if job was processed recently
+      const isRecentlyProcessed = job.processingCompletedAt && 
+                                 new Date(job.processingCompletedAt) > job24HoursAgo;
+      
+      // Check if job was started recently (for in-progress jobs)
+      const isRecentlyStarted = job.processingStartedAt && 
+                               new Date(job.processingStartedAt) > job24HoursAgo;
+      
+      console.log('🕐 [SESSION] Time-based checks:', {
+        jobProcessingCompleted: job.processingCompletedAt,
+        jobProcessingStarted: job.processingStartedAt,
+        isRecentlyProcessed,
+        isRecentlyStarted,
+        cutoffTime: job24HoursAgo.toISOString()
+      });
+
+      // Check for active invoices (in Invoice table)
       const activeInvoicesResult = await client.models.Invoice.list({
         filter: {
           uploadJobId: { eq: job.id }
@@ -117,7 +142,7 @@ export const UploadStore: React.FC = () => {
         count: activeInvoicesResult.data?.length || 0 
       });
 
-      // Step 3: Check for submitted invoices (in SubmittedInvoice table)
+      // Check for submitted invoices (in SubmittedInvoice table)
       const submittedInvoicesResult = await client.models.SubmittedInvoice.list({
         filter: {
           originalUploadJobId: { eq: job.id }
@@ -133,18 +158,28 @@ export const UploadStore: React.FC = () => {
         count: submittedInvoicesResult.data?.length || 0 
       });
 
-      // File is current session ONLY if it has active invoices (not yet submitted)
-      // If there are no active invoices, it's from a previous session (even if submitted invoices exist)
-      const isCurrentSession = hasActiveInvoices;
+      // Enhanced session determination logic:
+      // A file is "current session" if:
+      // 1. It has active invoices (not yet submitted), OR
+      // 2. It was processed recently (within 24 hours) AND has no submitted invoices yet, OR
+      // 3. It's currently being processed (PROCESSING status)
+      const isCurrentSession = hasActiveInvoices || 
+                              (isRecentlyProcessed && !hasSubmittedInvoices) ||
+                              (isRecentlyStarted && !hasSubmittedInvoices) ||
+                              job.status === 'PROCESSING' ||
+                              job.status === 'PENDING';
 
-      console.log('✅ [SESSION] Final status determination:', {
+      console.log('✅ [SESSION] Enhanced status determination:', {
         filePath,
         hasActiveInvoices,
         hasSubmittedInvoices,
-        isCurrentSession, // Current session = has active invoices (regardless of submitted status)
+        isRecentlyProcessed,
+        isRecentlyStarted,
+        jobStatus: job.status,
+        isCurrentSession,
         jobId: job.id,
         processingStatus: job.status,
-        logic: 'Current session = has active invoices; Previous session = no active invoices'
+        logic: 'Current session = has active invoices OR recent processing OR in-progress status'
       });
 
       return {
@@ -166,7 +201,7 @@ export const UploadStore: React.FC = () => {
     }
   };
 
-  // Load user's files with session status
+  // Load user's files with session status - ONLY CURRENT SESSION FILES
   const loadFiles = useCallback(async () => {
     try {
       setLoading(true);
@@ -206,23 +241,25 @@ export const UploadStore: React.FC = () => {
         previousSession: enhancedFiles.filter(f => !f.isCurrentSession).length
       });
 
-      // Sort files: Current session files at top, previous session files below
-      // Within each group, sort by last modified date (newest first)
-      const sortedFiles = enhancedFiles.sort((a, b) => {
-        // Primary sort: Current session files first
-        if (a.isCurrentSession && !b.isCurrentSession) return -1;
-        if (!a.isCurrentSession && b.isCurrentSession) return 1;
-        
-        // Secondary sort: Within each group, sort by date (newest first)
+      // FILTER TO ONLY SHOW CURRENT SESSION FILES
+      const currentSessionFiles = enhancedFiles.filter(file => file.isCurrentSession);
+
+      console.log('📁 [DEBUG] Filtered to current session only:', {
+        originalCount: enhancedFiles.length,
+        filteredCount: currentSessionFiles.length,
+        removedPreviousSession: enhancedFiles.length - currentSessionFiles.length
+      });
+
+      // Sort current session files by date (newest first)
+      const sortedFiles = currentSessionFiles.sort((a, b) => {
         const aDate = a.lastModified?.getTime() || 0;
         const bDate = b.lastModified?.getTime() || 0;
         return bDate - aDate;
       });
 
-      console.log('📁 [DEBUG] Files sorted by session and date:', {
-        sortOrder: 'Current session first, then previous session, newest first within each group',
-        currentSessionFiles: sortedFiles.filter(f => f.isCurrentSession).map(f => getFileName(f.path)),
-        previousSessionFiles: sortedFiles.filter(f => !f.isCurrentSession).map(f => getFileName(f.path))
+      console.log('📁 [DEBUG] Files sorted by date (current session only):', {
+        sortOrder: 'Newest first',
+        currentSessionFiles: sortedFiles.map(f => getFileName(f.path))
       });
 
       setFiles(sortedFiles);
@@ -557,13 +594,27 @@ export const UploadStore: React.FC = () => {
       if (window.refreshInvoiceViewer) {
         window.refreshInvoiceViewer();
         
-        // Additional delayed refresh to ensure data propagation
+        // Additional refreshes with different timings to handle data propagation delays
         setTimeout(() => {
-          console.log('🔄 [DEBUG] Additional refresh after processing (1000ms)...');
+          console.log('🔄 [DEBUG] First delayed refresh after processing (500ms)...');
           if (window.refreshInvoiceViewer) {
             window.refreshInvoiceViewer();
           }
-        }, 1000);
+        }, 500);
+        
+        setTimeout(() => {
+          console.log('🔄 [DEBUG] Second delayed refresh after processing (1500ms)...');
+          if (window.refreshInvoiceViewer) {
+            window.refreshInvoiceViewer();
+          }
+        }, 1500);
+        
+        setTimeout(() => {
+          console.log('🔄 [DEBUG] Final delayed refresh after processing (3000ms)...');
+          if (window.refreshInvoiceViewer) {
+            window.refreshInvoiceViewer();
+          }
+        }, 3000);
       }
 
     } catch (error) {
@@ -706,6 +757,12 @@ export const UploadStore: React.FC = () => {
         if (window.refreshInvoiceViewer) {
           window.refreshInvoiceViewer();
         }
+        
+        // Also refresh file list to update session status
+        setTimeout(async () => {
+          console.log('🔄 [DEBUG] File list refresh after individual processing (1000ms)...');
+          await loadFiles();
+        }, 1000);
 
       } catch (err) {
         console.error(`💥 [DEBUG] Upload/processing failed for ${file.name}:`, {
@@ -771,15 +828,29 @@ export const UploadStore: React.FC = () => {
         if (window.refreshInvoiceViewer) {
           window.refreshInvoiceViewer();
         }
+        // Also refresh files to pick up session status changes
+        loadFiles();
       }, 500);
       
-      // Strategy 3: Final refresh to catch any stragglers
+      // Strategy 3: Secondary refresh for timing issues
       setTimeout(() => {
-        console.log('🔄 [DEBUG] Final invoice viewer refresh (2000ms)...');
+        console.log('🔄 [DEBUG] Secondary invoice viewer refresh (1500ms)...');
         if (window.refreshInvoiceViewer) {
           window.refreshInvoiceViewer();
         }
-      }, 2000);
+        // Refresh files again to ensure current session detection
+        loadFiles();
+      }, 1500);
+      
+      // Strategy 4: Final refresh to catch any stragglers
+      setTimeout(() => {
+        console.log('🔄 [DEBUG] Final invoice viewer refresh (3000ms)...');
+        if (window.refreshInvoiceViewer) {
+          window.refreshInvoiceViewer();
+        }
+        // Final files refresh for session status
+        loadFiles();
+      }, 3000);
       
       console.log('✅ [DEBUG] Multiple invoice refresh strategies activated');
       
@@ -1280,12 +1351,8 @@ export const UploadStore: React.FC = () => {
 
       <div className="files-section">
         <div className="files-header">
-          <h3>📁 Files Manager <span className="subtitle">Uploaded Files</span></h3>
+          <h3>📁 Files Manager <span className="subtitle">Current Session Files</span></h3>
           <div className="header-actions">
-            <div className="session-legend">
-              <span className="legend-item current-session">🟢 Current Session</span>
-              <span className="legend-item previous-session">🔒 Previous Session</span>
-            </div>
             <button onClick={loadFiles} className="refresh-btn" disabled={loading}>
               {loading ? '🔄 Loading...' : '🔄 Refresh'}
             </button>
@@ -1296,21 +1363,18 @@ export const UploadStore: React.FC = () => {
           <div className="loading">Loading files...</div>
         ) : files.length === 0 ? (
           <div className="no-files">
-            No files found. Upload invoice files to get started!
+            No active files found. Upload invoice files to get started!
           </div>
         ) : (
           <div className="files-list-container">
             <div className="files-list">
               {files.map((file) => (
-                <div key={file.path} className={`file-item ${file.isCurrentSession ? 'current-session' : 'previous-session'}`}>
+                <div key={file.path} className="file-item">
                   <div className="file-info">
                     <div className="file-header">
                       <div className="file-name">
                         <span className="file-icon">📄</span>
                         {getFileName(file.path)}
-                        <span className={`session-badge ${file.isCurrentSession ? 'current' : 'previous'}`}>
-                          {file.isCurrentSession ? '🟢 Current Session' : '🔒 Previous Session'}
-                        </span>
                       </div>
                       <div className="file-status">
                         {file.hasActiveInvoices && (
@@ -1337,7 +1401,6 @@ export const UploadStore: React.FC = () => {
                   </div>
                   
                   <div className="file-actions">
-                    {/* Download button - always available */}
                     <button
                       onClick={() => handleDownloadFile(file.path)}
                       className="download-btn"
@@ -1347,21 +1410,14 @@ export const UploadStore: React.FC = () => {
                       {downloadingFiles.has(file.path) ? '🔄 Downloading...' : '⤵ Download'}
                     </button>
                     
-                    {/* Delete button - only for current session files */}
-                    {file.isCurrentSession ? (
-                      <button
-                        onClick={() => handleDeleteFile(file.path)}
-                        className="delete-btn"
-                        title={deletingFiles.has(file.path) ? "Deleting file and data..." : "Delete file and all associated data"}
-                        disabled={deletingFiles.has(file.path)}
-                      >
-                        {deletingFiles.has(file.path) ? '🔄 Deleting...' : '🗑️ Delete'}
-                      </button>
-                    ) : (
-                      <div className="delete-disabled" title="Cannot delete files from previous sessions">
-                        🔒 Read-only
-                      </div>
-                    )}
+                    <button
+                      onClick={() => handleDeleteFile(file.path)}
+                      className="delete-btn"
+                      title={deletingFiles.has(file.path) ? "Deleting file and data..." : "Delete file and all associated data"}
+                      disabled={deletingFiles.has(file.path)}
+                    >
+                      {deletingFiles.has(file.path) ? '🔄 Deleting...' : '🗑️ Delete'}
+                    </button>
                   </div>
                 </div>
               ))}
@@ -1535,53 +1591,11 @@ export const UploadStore: React.FC = () => {
           gap: 15px;
           flex-wrap: wrap;
         }
-.header-titles {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-}
 
-.header-titles h3 {
-  margin: 0;
-  color: #002b4b;
-}
-
-.header-titles h5 {
-  margin: 0;
-  color: #5e6e77;
-  font-weight: 500;
-}
-  .subtitle {
-  font-size: 14px;
-  font-weight: 400;
-  color: #5e6e77;
-}
-
-.header-title-group {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-        .session-legend {
-          display: flex;
-          gap: 12px;
-          font-size: 12px;
-        }
-
-        .legend-item {
-          padding: 4px 8px;
-          border-radius: 12px;
-          font-weight: 500;
-        }
-
-        .legend-item.current-session {
-          background: #d1fae5;
-          color: #065f46;
-        }
-
-        .legend-item.previous-session {
-          background: #f3f4f6;
-          color: #374151;
+        .subtitle {
+          font-size: 14px;
+          font-weight: 400;
+          color: #5e6e77;
         }
 
         .refresh-btn {
@@ -1638,20 +1652,12 @@ export const UploadStore: React.FC = () => {
           border-radius: 6px;
           transition: all 0.2s;
           gap: 15px;
+          border-left: 4px solid #10b981;
         }
 
         .file-item:hover {
           background: #f0f9ff;
           border-color: #32b3e7;
-        }
-
-        .file-item.current-session {
-          border-left: 4px solid #10b981;
-        }
-
-        .file-item.previous-session {
-          border-left: 4px solid #6b7280;
-          background: #fafafa;
         }
 
         .file-info {
@@ -1679,24 +1685,6 @@ export const UploadStore: React.FC = () => {
 
         .file-icon {
           font-size: 16px;
-        }
-
-        .session-badge {
-          padding: 2px 6px;
-          border-radius: 8px;
-          font-size: 10px;
-          font-weight: 600;
-          white-space: nowrap;
-        }
-
-        .session-badge.current {
-          background: #d1fae5;
-          color: #065f46;
-        }
-
-        .session-badge.previous {
-          background: #f3f4f6;
-          color: #374151;
         }
 
         .file-status {
@@ -1787,17 +1775,6 @@ export const UploadStore: React.FC = () => {
           cursor: not-allowed;
         }
 
-        .delete-disabled {
-          padding: 8px 12px;
-          background: #f3f4f6;
-          color: #6b7280;
-          border: 1px solid #d1d5db;
-          border-radius: 4px;
-          font-size: 12px;
-          font-weight: 500;
-          white-space: nowrap;
-        }
-
         /* Scrollbar Styling */
         .files-list-container::-webkit-scrollbar {
           width: 8px;
@@ -1846,10 +1823,6 @@ export const UploadStore: React.FC = () => {
             align-items: stretch;
             gap: 10px;
           }
-
-          .session-legend {
-            justify-content: center;
-          }
           
           .file-item {
             flex-direction: column;
@@ -1892,7 +1865,7 @@ export const UploadStore: React.FC = () => {
             padding: 12px;
           }
           
-          .session-badge, .status-badge {
+          .status-badge {
             font-size: 9px;
           }
         }

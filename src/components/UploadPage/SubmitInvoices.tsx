@@ -1,7 +1,7 @@
 // components/SubmitInvoices.tsx - Updated with duplicate invoice ID check
 import React, { useState, useMemo, useEffect } from 'react';
 import { generateClient } from 'aws-amplify/data';
-import type { Schema } from '../../amplify/data/resource';
+import type { Schema } from '../../../amplify/data/resource';
 
 const client = generateClient<Schema>();
 
@@ -127,9 +127,7 @@ export const SubmitInvoices: React.FC<SubmitInvoicesProps> = ({
     const confirmSubmission = window.confirm(
       `Are you sure you want to submit ${validInvoices.length} valid invoice(s)?\n\n` +
       `This will:\n` +
-      `• Move all invoice data to permanent storage\n` +
-      `• Clear the current invoice workspace\n` +
-      `• Keep all PDF files in storage\n` +
+      `• Move all invoice data to the next step\n` +
       `• Clear the uploaded files list\n\n` +
       `This action cannot be undone.`
     );
