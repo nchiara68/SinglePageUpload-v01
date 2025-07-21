@@ -1,4 +1,4 @@
-// src/pages/DashboardPage.tsx - Main Dashboard Page
+// src/pages/DashboardPage.tsx - Main Dashboard Page - TypeScript Fixed
 import React, { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { generateClient } from 'aws-amplify/data';
@@ -6,33 +6,50 @@ import type { Schema } from '../../amplify/data/resource';
 
 const client = generateClient<Schema>();
 
-interface DashboardPageProps {
-  user?: {
-    username?: string;
-    attributes?: {
-      email?: string;
-    };
-    signInDetails?: {
-      loginId?: string;
-    };
-  };
+// Define proper types for AWS Amplify Auth
+export interface AuthEventData {
+  [key: string]: unknown;
 }
 
-const DashboardPage: React.FC<DashboardPageProps> = ({ user }) => {
+export interface AuthUser {
+  username?: string;
+  attributes?: {
+    email?: string;
+    [key: string]: unknown;
+  };
+  signInDetails?: {
+    loginId?: string;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+// Define subscription types
+interface Subscription {
+  unsubscribe: () => void;
+}
+
+// Updated interface to match what you're actually passing
+export interface DashboardPageProps {
+  signOut?: (data?: AuthEventData) => void;
+  user?: AuthUser;
+}
+
+const DashboardPage: React.FC<DashboardPageProps> = ({ user, signOut }) => {
   const [invoices, setInvoices] = useState<Schema["Invoice"]["type"][]>([]);
   const [submittedInvoices, setSubmittedInvoices] = useState<Schema["SubmittedInvoice"]["type"][]>([]);
   const [uploadJobs, setUploadJobs] = useState<Schema["InvoiceUploadJob"]["type"][]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const getUserDisplayName = () => {
+  const getUserDisplayName = (): string => {
     if (!user) return 'User';
     return user.attributes?.email || user.signInDetails?.loginId || user.username || 'User';
   };
 
   // Load dashboard data
   useEffect(() => {
-    const loadDashboardData = async () => {
+    const loadDashboardData = async (): Promise<void> => {
       try {
         setLoading(true);
         console.log('📊 [DASHBOARD] Loading dashboard data...');
@@ -76,13 +93,10 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user }) => {
 
     loadDashboardData();
 
-    // Set up real-time subscriptions for live updates
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let invoiceSubscription: any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let submittedSubscription: any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let jobsSubscription: any;
+    // Set up real-time subscriptions for live updates with proper typing
+    let invoiceSubscription: Subscription | null = null;
+    let submittedSubscription: Subscription | null = null;
+    let jobsSubscription: Subscription | null = null;
 
     try {
       console.log('📊 [DASHBOARD] Setting up real-time subscriptions...');
@@ -92,7 +106,7 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user }) => {
           console.log('📊 [DASHBOARD] Invoice subscription update:', items.length);
           setInvoices(items);
         },
-        error: (err) => console.error('❌ [DASHBOARD] Invoice subscription error:', err)
+        error: (err: Error) => console.error('❌ [DASHBOARD] Invoice subscription error:', err)
       });
 
       submittedSubscription = client.models.SubmittedInvoice.observeQuery().subscribe({
@@ -100,7 +114,7 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user }) => {
           console.log('📊 [DASHBOARD] Submitted invoice subscription update:', items.length);
           setSubmittedInvoices(items);
         },
-        error: (err) => console.error('❌ [DASHBOARD] Submitted invoice subscription error:', err)
+        error: (err: Error) => console.error('❌ [DASHBOARD] Submitted invoice subscription error:', err)
       });
 
       jobsSubscription = client.models.InvoiceUploadJob.observeQuery().subscribe({
@@ -108,7 +122,7 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user }) => {
           console.log('📊 [DASHBOARD] Upload jobs subscription update:', items.length);
           setUploadJobs(items);
         },
-        error: (err) => console.error('❌ [DASHBOARD] Upload jobs subscription error:', err)
+        error: (err: Error) => console.error('❌ [DASHBOARD] Upload jobs subscription error:', err)
       });
 
       console.log('✅ [DASHBOARD] Real-time subscriptions established');
@@ -184,7 +198,7 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user }) => {
     };
   }, [invoices, submittedInvoices, uploadJobs]);
 
-  const formatCurrency = (amount: number) => {
+  const formatCurrency = (amount: number): string => {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: 'USD',
@@ -193,7 +207,7 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user }) => {
     }).format(amount);
   };
 
-  const formatDateTime = (dateString: string | null | undefined) => {
+  const formatDateTime = (dateString: string | null | undefined): string => {
     if (!dateString) return 'N/A';
     try {
       return new Date(dateString).toLocaleDateString();
@@ -202,7 +216,7 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user }) => {
     }
   };
 
-  const getStatusBadgeClass = (status: string) => {
+  const getStatusBadgeClass = (status: string): string => {
     switch (status?.toLowerCase()) {
       case 'completed': return 'status-completed';
       case 'processing': return 'status-processing';
@@ -243,6 +257,12 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user }) => {
             <span className="action-icon">📋</span>
             <span>View History</span>
           </Link>
+          {signOut && (
+            <button onClick={() => signOut()} className="quick-action-btn tertiary">
+              <span className="action-icon">🚪</span>
+              <span>Sign Out</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -471,6 +491,9 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user }) => {
           font-weight: 600;
           transition: all 0.2s;
           white-space: nowrap;
+          border: none;
+          cursor: pointer;
+          font-size: 14px;
         }
 
         .quick-action-btn.primary {
@@ -492,6 +515,17 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user }) => {
 
         .quick-action-btn.secondary:hover {
           background: rgba(50, 179, 231, 0.1);
+          transform: translateY(-1px);
+        }
+
+        .quick-action-btn.tertiary {
+          background: rgba(239, 68, 68, 0.1);
+          color: #dc2626;
+          border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+
+        .quick-action-btn.tertiary:hover {
+          background: rgba(239, 68, 68, 0.15);
           transform: translateY(-1px);
         }
 
