@@ -55,7 +55,7 @@ export const Navbar: React.FC<NavbarProps> = ({ signOut, user }) => {
     },
     {
       path: '/submitted-invoices',
-      label: 'History',
+      label: 'Sell',
       icon: '',
       description: 'View submitted invoices'
     }

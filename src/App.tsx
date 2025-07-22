@@ -29,19 +29,19 @@ export default function App() {
                   {/* Dashboard - Default route */}
                   <Route 
                     path="/" 
-                    element={<DashboardPage signOut={signOut} user={user} />} 
+                    element={<DashboardPage />} 
                   />
                   
                   {/* Upload Page */}
                   <Route 
                     path="/upload" 
-                    element={<UploadPage signOut={signOut} user={user} />} 
+                    element={<UploadPage />} 
                   />
                   
                   {/* Submitted Invoices Page */}
                   <Route 
                     path="/submitted-invoices" 
-                    element={<SubmittedInvoicesPage signOut={signOut} user={user} />} 
+                    element={<SubmittedInvoicesPage />} 
                   />
                   
                   {/* Catch-all redirect to dashboard */}
@@ -107,4 +107,3 @@ export default function App() {
     </div>
   );
 }
-
