@@ -1,5 +1,5 @@
 // src/types/global.d.ts - Global TypeScript declarations
-import { AmplifyConfig } from '../utils/amplifyConfigSetup';
+import type { AmplifyConfig } from '../utils/amplifyConfigSetup';
 
 declare global {
   interface Window {

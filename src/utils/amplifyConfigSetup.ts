@@ -9,7 +9,7 @@ export interface AmplifyStorageConfig {
 }
 
 export interface AmplifyConfig {
-  storage: AmplifyStorageConfig;
+  storage?: AmplifyStorageConfig; // Made optional to match usage
 }
 
 export interface AmplifyOutputs {
@@ -32,12 +32,7 @@ export interface AmplifyOutputs {
   };
 }
 
-// Extend Window interface to include our configuration
-declare global {
-  interface Window {
-    amplifyConfig?: AmplifyConfig;
-  }
-}
+// Note: Global Window interface is declared in src/types/global.d.ts
 
 // Configure Amplify with outputs
 Amplify.configure(outputs);

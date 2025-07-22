@@ -4,30 +4,14 @@ import { generateClient } from 'aws-amplify/data';
 import { uploadData, getUrl } from 'aws-amplify/storage';
 import type { Schema } from '../../../amplify/data/resource';
 import { SubmitInvoices } from './SubmitInvoices';
+//import type { AmplifyConfig, AmplifyStorageConfig } from '../../utils/amplifyConfigSetup';
 
 const client = generateClient<Schema>();
 
 type SortableField = 'issueDate' | 'dueDate' | 'amount' | 'daysToDueDate' | 'maturityDays' | 'invoiceId' | 'sellerId' | 'debtorId' | 'product' | 'currency' | 'format' | 'pdfDocument';
 
-// Define types for Amplify configuration
-interface AmplifyStorageConfig {
-  bucket_name?: string;
-}
-
-interface AmplifyConfig {
-  storage?: AmplifyStorageConfig;
-}
-
 interface StorageConfigItem {
   bucket?: string;
-}
-
-// Extend Window interface to include our refresh function and amplify config
-declare global {
-  interface Window {
-    refreshInvoiceViewer?: () => void;
-    amplifyConfig?: AmplifyConfig;
-  }
 }
 
 // Type for subscription
@@ -42,6 +26,8 @@ interface UploadResultExtended {
   bucket?: string;
   url?: string;
 }
+
+// Note: Global Window interface declarations are in src/types/global.d.ts
 
 export const InvoiceViewer: React.FC = () => {
   const [invoices, setInvoices] = useState<Schema["Invoice"]["type"][]>([]);
