@@ -3,37 +3,21 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { generateClient } from 'aws-amplify/data';
 import type { Schema } from '../../amplify/data/resource';
+import type { AuthUser } from '@aws-amplify/auth';
+ // ✅ correct type import
 
 const client = generateClient<Schema>();
 
-// Define proper types for AWS Amplify Auth
-export interface AuthEventData {
-  [key: string]: unknown;
-}
-
-export interface AuthUser {
-  username?: string;
-  attributes?: {
-    email?: string;
-    [key: string]: unknown;
-  };
-  signInDetails?: {
-    loginId?: string;
-    [key: string]: unknown;
-  };
-  [key: string]: unknown;
-}
-
-// Define subscription types
 interface Subscription {
   unsubscribe: () => void;
 }
 
 // Updated interface to match what you're actually passing
 export interface DashboardPageProps {
-  signOut?: (data?: AuthEventData) => void;
+  signOut?: () => void;
   user?: AuthUser;
 }
+
 
 const DashboardPage: React.FC<DashboardPageProps> = ({ user, signOut }) => {
   const [invoices, setInvoices] = useState<Schema["Invoice"]["type"][]>([]);
@@ -44,7 +28,7 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, signOut }) => {
 
   const getUserDisplayName = (): string => {
     if (!user) return 'User';
-    return user.attributes?.email || user.signInDetails?.loginId || user.username || 'User';
+    return user?.signInDetails?.loginId || user.signInDetails?.loginId || user.username || 'User';
   };
 
   // Load dashboard data
