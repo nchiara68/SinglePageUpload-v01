@@ -1,4 +1,4 @@
-// amplify/data/resource.ts - Updated with SubmittedInvoice table for frontend submission
+// amplify/data/resource.ts - FIXED with proper owner authorization
 import { type ClientSchema, a, defineData } from "@aws-amplify/backend";
 
 const schema = a.schema({
@@ -21,7 +21,7 @@ const schema = a.schema({
     invoices: a.hasMany('Invoice', 'uploadJobId'),
   })
   .authorization(allow => [
-    allow.authenticated()
+    allow.owner() // ✅ Only the owner can access their upload jobs
   ]),
 
   // Table 1: Working invoice data (gets deleted after submission)
@@ -47,7 +47,7 @@ const schema = a.schema({
     pdfS3FullPath: a.string(), // Complete path including bucket name
   })
   .authorization(allow => [
-    allow.authenticated()
+    allow.owner() // ✅ Only the owner can access their invoices
   ]),
 
   // Table 2: Submitted invoice data (permanent storage)
@@ -75,7 +75,7 @@ const schema = a.schema({
     submittedBy: a.string(), // User who submitted
   })
   .authorization(allow => [
-    allow.authenticated()
+    allow.owner() // ✅ Only the owner can access their submitted invoices
   ]),
 });
 
