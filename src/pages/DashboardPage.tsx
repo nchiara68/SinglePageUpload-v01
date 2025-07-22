@@ -3,8 +3,6 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { generateClient } from 'aws-amplify/data';
 import type { Schema } from '../../amplify/data/resource';
-import type { AuthUser } from '@aws-amplify/auth';
- // ✅ correct type import
 
 const client = generateClient<Schema>();
 
@@ -12,24 +10,18 @@ interface Subscription {
   unsubscribe: () => void;
 }
 
-// Updated interface to match what you're actually passing
+// Updated interface with user elements removed
 export interface DashboardPageProps {
-  signOut?: () => void;
-  user?: AuthUser;
+  // Props can be added here as needed
 }
 
 
-const DashboardPage: React.FC<DashboardPageProps> = ({ user, signOut }) => {
+const DashboardPage: React.FC<DashboardPageProps> = () => {
   const [invoices, setInvoices] = useState<Schema["Invoice"]["type"][]>([]);
   const [submittedInvoices, setSubmittedInvoices] = useState<Schema["SubmittedInvoice"]["type"][]>([]);
   const [uploadJobs, setUploadJobs] = useState<Schema["InvoiceUploadJob"]["type"][]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  const getUserDisplayName = (): string => {
-    if (!user) return 'User';
-    return user?.signInDetails?.loginId || user.signInDetails?.loginId || user.username || 'User';
-  };
 
   // Load dashboard data
   useEffect(() => {
@@ -229,24 +221,11 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, signOut }) => {
       {/* Welcome Header */}
       <div className="dashboard-header">
         <div className="welcome-section">
-          <h1>Welcome back, {getUserDisplayName().split('@')[0]}! 👋</h1>
-          <p>Here's an overview of your invoice management activity</p>
+          <h1>Dashboard</h1>
+          <p></p>
         </div>
         <div className="quick-actions">
-          <Link to="/upload" className="quick-action-btn primary">
-            <span className="action-icon">📤</span>
-            <span>Upload Invoices</span>
-          </Link>
-          <Link to="/submitted-invoices" className="quick-action-btn secondary">
-            <span className="action-icon">📋</span>
-            <span>View History</span>
-          </Link>
-          {signOut && (
-            <button onClick={() => signOut()} className="quick-action-btn tertiary">
-              <span className="action-icon">🚪</span>
-              <span>Sign Out</span>
-            </button>
-          )}
+          {/* Quick action buttons can be added here as needed */}
         </div>
       </div>
 
@@ -259,7 +238,7 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, signOut }) => {
       {/* Key Metrics Grid */}
       <div className="metrics-grid">
         <div className="metric-card primary">
-          <div className="metric-icon">📊</div>
+          <div className="metric-icon"></div>
           <div className="metric-content">
             <div className="metric-number">{analytics.totalActiveInvoices.toLocaleString()}</div>
             <div className="metric-label">Active Invoices</div>
@@ -272,7 +251,7 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, signOut }) => {
         </div>
 
         <div className="metric-card success">
-          <div className="metric-icon">💰</div>
+          <div className="metric-icon"></div>
           <div className="metric-content">
             <div className="metric-number">{formatCurrency(analytics.activeInvoicesValue)}</div>
             <div className="metric-label">Active Value</div>
@@ -281,7 +260,7 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, signOut }) => {
         </div>
 
         <div className="metric-card info">
-          <div className="metric-icon">📋</div>
+          <div className="metric-icon"></div>
           <div className="metric-content">
             <div className="metric-number">{analytics.totalSubmittedInvoices.toLocaleString()}</div>
             <div className="metric-label">Submitted Invoices</div>

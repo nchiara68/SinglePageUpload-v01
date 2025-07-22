@@ -1351,7 +1351,7 @@ export const UploadStore: React.FC = () => {
 
       <div className="files-section">
         <div className="files-header">
-          <h3>📁 Files Manager <span className="subtitle">Current Session Files</span></h3>
+          <h3>📁 Files Manager <span className="subtitle"></span></h3>
           <div className="header-actions">
             <button onClick={loadFiles} className="refresh-btn" disabled={loading}>
               {loading ? '🔄 Loading...' : '🔄 Refresh'}

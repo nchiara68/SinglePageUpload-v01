@@ -44,19 +44,19 @@ export const Navbar: React.FC<NavbarProps> = ({ signOut, user }) => {
     {
       path: '/',
       label: 'Dashboard',
-      icon: '📊',
+      icon: '',
       description: 'Overview and analytics'
     },
     {
       path: '/upload',
       label: 'Upload',
-      icon: '📤',
+      icon: '',
       description: 'Upload and process invoices'
     },
     {
       path: '/submitted-invoices',
       label: 'History',
-      icon: '📋',
+      icon: '',
       description: 'View submitted invoices'
     }
   ];
@@ -67,8 +67,8 @@ export const Navbar: React.FC<NavbarProps> = ({ signOut, user }) => {
         {/* Logo/Brand */}
         <div className="navbar-brand">
           <Link to="/" className="brand-link" onClick={closeMobileMenu}>
-            <span className="brand-icon">⚡</span>
-            <span className="brand-text">Invoice Manager</span>
+            <span className="brand-icon"></span>
+            <span className="brand-text">Trade Finance Manager</span>
           </Link>
         </div>
 

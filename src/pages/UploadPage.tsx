@@ -5,24 +5,10 @@ import { InvoiceViewer } from '../components/UploadPage/InvoiceViewer';
 import { uploadPageTheme } from '../theme';
 
 interface UploadPageProps {
-  signOut?: () => void;
-  user?: {
-    username?: string;
-    attributes?: {
-      email?: string;
-    };
-    signInDetails?: {
-      loginId?: string;
-    };
-  };
+  // Props can be added here as needed
 }
 
-const UploadPage: React.FC<UploadPageProps> = ({ signOut, user }) => {
-  const getUserDisplayName = () => {
-    if (!user) return 'User';
-    // Prioritize email, then fallback to username/loginId
-    return user.attributes?.email || user.signInDetails?.loginId || user.username || 'User';
-  };
+const UploadPage: React.FC<UploadPageProps> = () => {
 
   // Simple scroll to top when page loads
   React.useEffect(() => {
@@ -40,19 +26,7 @@ const UploadPage: React.FC<UploadPageProps> = ({ signOut, user }) => {
           </div>
           
           <div className="header-actions">
-            <div className="user-info">
-              👤 {getUserDisplayName()}
-            </div>
-            
-            {signOut && (
-              <button 
-                onClick={signOut} 
-                className="sign-out-btn"
-                title="Sign out of the application"
-              >
-                🚪 Sign Out
-              </button>
-            )}
+            {/* Removed user info and sign out button */}
           </div>
         </div>
       </div>
@@ -64,7 +38,7 @@ const UploadPage: React.FC<UploadPageProps> = ({ signOut, user }) => {
           <div className="section">
             <div className="section-header">
               <h2>Start</h2>
-              <p>Upload your commercial invoice files (CSV or Excel) for automated processing and analysis.</p>
+              <p></p>
             </div>
             <div className="component-wrapper">
               <UploadStore />

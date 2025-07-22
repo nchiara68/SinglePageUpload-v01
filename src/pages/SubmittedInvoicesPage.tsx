@@ -4,25 +4,10 @@ import { SubmittedInvoicesViewer } from '../components/SubmittedInvoicesPage/Sub
 import { uploadPageTheme } from '../theme'; // Reuse your existing theme
 
 interface SubmittedInvoicesPageProps {
-  signOut?: () => void;
-  user?: {
-    username?: string;
-    attributes?: {
-      email?: string;
-    };
-    signInDetails?: {
-      loginId?: string;
-    };
-  };
+  // Props can be added here as needed
 }
 
-const SubmittedInvoicesPage: React.FC<SubmittedInvoicesPageProps> = ({ signOut, user }) => {
-  const getUserDisplayName = () => {
-    if (!user) return 'User';
-    // Prioritize email, then fallback to username/loginId
-    return user.attributes?.email || user.signInDetails?.loginId || user.username || 'User';
-  };
-
+const SubmittedInvoicesPage: React.FC<SubmittedInvoicesPageProps> = () => {
   // Simple scroll to top when page loads
   React.useEffect(() => {
     window.scrollTo(0, 0);
@@ -39,19 +24,7 @@ const SubmittedInvoicesPage: React.FC<SubmittedInvoicesPageProps> = ({ signOut, 
           </div>
           
           <div className="header-actions">
-            <div className="user-info">
-              👤 {getUserDisplayName()}
-            </div>
-            
-            {signOut && (
-              <button 
-                onClick={signOut} 
-                className="sign-out-btn"
-                title="Sign out of the application"
-              >
-                🚪 Sign Out
-              </button>
-            )}
+            {/* Header actions can be added here as needed */}
           </div>
         </div>
       </div>
